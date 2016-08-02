@@ -1,0 +1,10 @@
+---
+title: "Primary Scratch"
+author: "K Todd-Brown (ktoddbrown@gmail.com)"
+date: "August 2, 2016"
+output: html_document
+---
+
+```{r}
+library(deSolve)
+```
