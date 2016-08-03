@@ -5,6 +5,22 @@ date: "August 2, 2016"
 output: html_document
 ---
 
-```{r}
+```{r libraries}
 library(deSolve)
+library(assertthat)
+library(rootSolve)
 ```
+
+```{r}
+source('R/BECS.R')
+parms <- list(vmax_up=0.1, km_up=1, enz_prod=0.1, 
+              vmax_enz=0.4, km_enz=2, cue=0.75, death=100, E_turnover=200, inputC=0.1)
+SOC_0 <- unlist(list(B=0.8, E=0.1, S=0.5, C=10))
+temp <- dBECS_dt(t=0, y=SOC_0, parms)
+SS <- stode(y=SOC_0, func=dBECS_dt, parms=parms, pos=TRUE)
+SS_analytical <- SS_BECS(parms)
+
+print(SS)
+print(SS_analytical)
+```
+
