@@ -9,12 +9,15 @@ output: html_document
 library(deSolve)
 library(assertthat)
 library(rootSolve)
+library(plyr)
+library(lhs)
 ```
 
-```{r}
+```{r BECS}
 source('R/BECS.R')
 parms <- list(vmax_up=0.1, km_up=1, enz_prod=0.1, 
-              vmax_enz=0.4, km_enz=2, cue=0.75, death=100, E_turnover=200, inputC=0.1)
+              vmax_enz=0.4, km_enz=2, cue=0.75, 
+              death=100, E_turnover=200, inputC=0.1)
 SOC_0 <- unlist(list(B=0.8, E=0.1, S=0.5, C=10))
 temp <- dBECS_dt(t=0, y=SOC_0, parms)
 SS <- stode(y=SOC_0, func=dBECS_dt, parms=parms, pos=TRUE)
@@ -22,5 +25,50 @@ SS_analytical <- SS_BECS(parms)
 
 print(SS)
 print(SS_analytical)
+
+enz_prodResponse <- adply(seq(0, 1, by=0.001), c(1), function(xx){
+  parms$enz_prod <- xx
+  ans <- SS_BECS(parms)
+  return(data.frame(enz_prod=xx, B=ans$B, S=ans$S))
+})
+
+ggplot(enz_prodResponse) + geom_point(aes(x=enz_prod, y=B))
 ```
 
+TODO: 
+X 1) Calculate max from biomass from enz_prod variation from 0 to 1
+2) Iterate through parameter space
+3) Plot max biomass for parameter space
+
+```{r sample}
+parmRange <- read.csv('data/JAM_params.csv', stringsAsFactors=FALSE)
+nameKey <- list(vmax_up='v_up', km_up='k_up', enz_prod='enz_prod', 
+              vmax_enz='v_enz', km_enz='k_enz', cue='cue', 
+              death='tau_B', E_turnover='tau_B', inputC=NA)
+nameKey <- data.frame(varName = names(nameKey), parameter = unlist(nameKey), stringsAsFactors=FALSE)
+parmRange <- merge(nameKey, parmRange, all.x=TRUE)
+
+parmRange[parmRange$varName %in% 'inputC', c('min', 'max')] <- c(1e-6, 2.7e-4) #from NPP range of 0 to 6.5 g m^-3 day^-1 of global NPP
+parmRange[parmRange$varName %in% 'inputC', c('unit')] <- 'kg-C m^-3-soil hr^-1'
+
+parmRange <- parmRange[parmRange$varName %in% c('enz_prod', 'km_up', 'vmax_up', 'death', 'cue', 'inputC'),]
+
+sampleNum <- 10000
+unifSample <- as.data.frame(improvedLHS(sampleNum, dim(parmRange)[1]))
+names(unifSample) <- parmRange$varName
+unifSample$index <- 1:sampleNum
+
+trueSample <- ddply(unifSample, c('index'), function(xx){
+  parSet <- xx[parmRange$varName]
+  ans <- as.list(exp(log(parmRange$min) + 
+                       log(parmRange$max / parmRange$min) * unlist(parSet)))
+  temp <- SS_BECS(ans)
+  ans$B <- temp$B
+  ans$S <- temp$S
+  #ans$maxB <- max_Bs_BECS(ans)
+  return(as.data.frame(ans))
+})
+
+trueSample[parmRange$varName] < parmRange$min
+
+```
