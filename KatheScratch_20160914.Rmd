@@ -1,0 +1,99 @@
+---
+title: "KatheScratch_20160914"
+author: "K Todd-Brown (ktoddbrown@gmail.com)"
+date: "September 14, 2016"
+output: html_document
+---
+
+```{r}
+source('R/BECS.R')
+parms <- list(inputC=1, loss=0.002, cue=0.3, cue_enz=0.3, 
+     death=1/0.01, E_turnover=1/0.01, 
+     vmax_enz=1, km_enz=6, km_up=0.3, vmax_up=0.04, enz_prod=0.09)
+y0 <- c(B=28, E=1.4, C=10, S=1)
+test <- stode(y=y0, func=dBECS_dt, parms=parms)
+
+temp <- ddply(data.frame(enz_prod=seq(0, 1, length=1e3)), c('enz_prod'), function(xx){
+  parms$enz_prod <- xx$enz_prod
+  #ans <- stode(y=y0, func=dBECS_dt, parms=parms)$y
+  ans <- as.data.frame(SS_BECS(parms))
+  return(ans)
+})
+ggplot(temp) + geom_point(aes(x=enz_prod, y=B)) + ylim(0,100)
+
+temp <- melt(temp, id.vars='enz_prod')
+ggplot(temp) + geom_point(aes(x=enz_prod, y=value, color=value < 0)) + facet_wrap(~variable) + geom_hline(yintercept=0) + ylim(-10, 100) + xlim(0.1131131, 0.1661662)
+```
+
+```{r}
+parm <- list(h=1e-2, k=10, I=0.4, m=0.001)
+##Cap m < 0.2
+##cue/h < 0.05
+parm$a <- with(parm, 100*h*(k+100)/100)
+parm$b <- 5
+
+steady.state <- data.frame(cue=seq(0, 1, length=1e2))
+#steady.state$v <- with(parm, b-a*steady.state$cue)
+steady.state$v <- with(parm, a*exp(-b*steady.state$cue))
+steady.state$check.C <- steady.state$cue*steady.state$v > parm$h
+steady.state$check.B <- steady.state$cue*steady.state$v > with(parm, m*k*h/I+h)
+summary(steady.state)
+assert_that(any(steady.state$check.C & steady.state$check.B))
+
+steady.state$C <- with(parm, h*k/(steady.state$cue*steady.state$v-h))
+steady.state$B <- with(parm, steady.state$cue/h*(I-m*steady.state$C))
+steady.state$perB <- steady.state$B/(steady.state$C + steady.state$B)
+
+bestCUE <- steady.state$cue[which.max(subset(steady.state, check.C & check.B)$B)]
+
+plotdf <- melt(steady.state, measure.vars=c('C', 'B', 'perB'))
+ggplot(subset(plotdf, check.C & check.B)) + geom_line(aes(x=cue, y=value)) + facet_wrap(~variable, scales='free') + geom_vline(xintercept=bestCUE, color='grey')
+```
+
+```{r}
+library(deSolve)
+
+ans <- data.frame()
+parmArr <- data.frame()
+for(ii in 1:1e3){
+  cue <- runif(2)
+  
+  parm <- list(index=ii, I=0.4, m=0.001, 
+               h1=1e-2, k1=10, cue1=cue[1],
+               h2=1e-2, k2=10, cue2=cue[2])
+  
+  parm$a1 <- with(parm, 100*h1*(k1+100)/100)
+  parm$b1 <- 5
+  parm$v1 <- with(parm, a1*exp(-b1*cue1))
+  
+  parm$a2 <- with(parm, 100*h2*(k2+100)/100)
+  parm$b2 <- 5
+  parm$v2 <- with(parm, a2*exp(-b2*cue2))
+  
+  dC <- function(t, y, parms){
+    B1 <- y[1]; B2 <- y[2]; C <- y[3]
+    with(parms,{
+      ans <- c(v1*B1*C/(k1+C)*cue1 - h1*B1,
+               v2*B2*C/(k2+C)*cue2 - h2*B2,
+               I-m*C-v1*B1*C/(k1+C)*cue1-v2*B2*C/(k2+C))
+      return(list(ans))
+    })
+ 
+  }
+  timearr <- seq(0, 365*10, length=1000)
+  evolution <- lsoda(y=c(B1=15, B2=1, C=25), timearr, dC, parms=parm)
+  temp <- as.data.frame(evolution)
+  temp$time <- timearr
+  temp$index <- ii
+  parm$winner <- names(temp)[2:3][which.max(temp[1000, 2:3])]
+  if(any(temp[1000, ] < 0)) parm$winner <- NA
+  parmArr <- rbind.fill(parmArr, as.data.frame(parm))
+  
+  ans <- rbind.fill(ans, temp)
+}
+
+plotdf <- melt(ans, id.vars=c('time', 'index'))
+ggplot(plotdf) + geom_line(aes(x=time, y=value, group=index), alpha=0.5) + facet_wrap(~variable, scale='free')
+
+ggplot(parmArr) + geom_point(aes(x=cue1, y=cue2, color=winner)) + geom_abline(slope=1)
+```

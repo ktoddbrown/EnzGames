@@ -5,28 +5,122 @@ date: "August 2, 2016"
 output: html_document
 ---
 
+WTS: Steady state for BESCP (JAM) models with constant inputs.
+
 ```{r libraries}
 library(deSolve)
 library(assertthat)
 library(rootSolve)
 library(plyr)
 library(lhs)
+library(ggplot2)
+library(reshape2)
+```
+The full JAM model is defined below. 
+$$\frac{dB}{dt} = \epsilon_{cue}U - D_B - P $$
+$$\frac{dE}{dt} = P - D_E $$
+$$\frac{dS}{dt} = I_S + M - U - R_s$$
+$$\frac{dC}{dt} = I_C - M - R_c$$
+$$\frac{dP_S}{dt} = R_s $$
+$$\frac{dP_C}{dt} = R_c $$
+Where $B$ is the microbial biomass, $E$ enzyme carbon mass, $S$ simple bioavailable carbon pool, $C$ complex non-bioavailable carbon pool, $P_S$ mineral sorbed simple carbon pool, and $P_C$ mineral sorbed complex carbon pool.
+With rates: $U$ uptake kinetics (Monod: $U=\frac{vBS}{k+S}$), $D_B$ microbial death ($D_B=\frac{B}{\tau_B}$), $P$ enzyme production (Uptake driven: $P=pU$, Biomass drive: $P=pB$), enzyme turnover ($D_E = \frac{E}{\tau_E}$), $I_S$ inputs into simple carbon pool ($I_S=I\rho_s$), $I_C$ inputs to complex carbon pool ($I_C=I\rho_c$), $M$ conversion from complex to simple carbon (Michalious-Menten:$M=\frac{v_mEC}{k_m+C}$, reverse Michalius-Menten:$M=\frac{v_mEC}{k_m+E}$, multiplicative:$M=v_mEC$), $R_s$ mineral organic interaction for simple carbon ($R_s=\frac{S}{\tau_a}(1-\frac{P_S+P_C}{P_{sat}(P_S(t=0)+P_C(t=0))})-\frac{P_S}{\tau_d}$), and $R_c$  mineral organic interaction for complex carbon ($R_c=\frac{C}{\tau_a}(1-\frac{P_S+P_C}{P_{sat}(P_S(t=0)+P_C(t=0))})-\frac{P_C}{\tau_d}$).
+
+At steady state to $\frac{dP_S}{dt}$ and $\frac{dP_C}{dt}$
+$$0 = R_s= R_c$$
+
+Extending ${dS}{dt}$ and ${dC}{dt}$
+$$ 0 = I_S + M - U - R_s;  0 = I_C - M - R_c$$
+$$ 0 = (I_S + M - U) + (I_C - M)$$
+$$ 0 = I - U $$
+$$ U = I $$
+
+Extending $\frac{dE}{dt}$
+$$0 = P - D_E$$
+$$P = D_E$$
+
+Extending $\frac{dB}{dt}$ and substituing the above relationships and allow $P = pU$
+$$0 = \epsilon_{cue}U - D_B - P$$
+$$0 = \epsilon_{cue}U - D_B - pU$$
+$$0 = (\epsilon_{cue}-p) U - D_B$$
+$$0 = (\epsilon_{cue}-p) I - \frac{B}{\tau_B}$$
+$$B = I \tau_B (\epsilon_{cue}-p)$$
+
+Recall $U=I$
+$$\frac{vBS}{k+S} = I$$
+$$\tau_B (\epsilon_{cue}-p) I \frac{vS}{k+S} = I$$
+$$\tau_B (\epsilon_{cue}-p) \frac{vS}{k+S} = 1$$
+$$\tau_B (\epsilon_{cue}-p) vS=k+S$$
+$$[\tau_B (\epsilon_{cue}-p) v-1] S=k$$
+$$S = \frac{k}{\tau_B (\epsilon_{cue}-p) v-1}$$
+
+Recall $P = D_E$ and $U=I$
+$$pU = \frac{E}{\tau_E}$$
+$$E=Ip\tau_E$$
+
+Recall $0 = I_C - M$
+$$I_C=M$$
+$$I\rho_c=\frac{v_mEC}{k_m+C}$$
+$$I\rho_c=Ip\tau_E\frac{v_mC}{k_m+C}$$
+$$k_m+C=\frac{p\tau_Ev_m}{\rho_c}C$$
+$$k_m=(\frac{p\tau_Ev_m}{\rho_c}-1)C$$
+$$k_m=\frac{p\tau_Ev_m-\rho_c}{\rho_c}C$$
+$$C = \frac{k_m\rho_c}{p\tau_Ev_m-\rho_c}$$
+
+Recall $0=R_s$; $0=R_c$. Let $P=P_s+P_c$
+$$0=R_s+R_c$$
+$$0=\frac{S+C}{\tau_a}(1-\frac{P}{P_{sat}})-\frac{P}{\tau_d}$$
+$$0=\frac{S+C}{\tau_a}-\frac{P(S+C)}{\tau_a P_{sat}})-\frac{P}{\tau_d}$$
+$$P(\frac{S+C}{\tau_aP_{sat}} + \frac{1}{\tau_d}) = \frac{S+C}{\tau_a}$$
+$$ P (\frac{(S+C)\tau_d + \tau_a P_{sat}}{\tau_a P_{sat}\tau_d}) = \frac{S+C}{\tau_a}$$
+$$ P (\frac{(S+C)\tau_d + \tau_a P_{sat}}{P_{sat}\tau_d}) = S+C$$
+$$ P = (S+C) \frac{P_{sat}\tau_d}{(S+C)\tau_d + \tau_a P_{sat}}$$
+
+Recall $0 = R_s$
+$$0=\frac{S}{\tau_a}(1-\frac{P}{P_{sat}})-\frac{P_s}{\tau_d}$$
+$$0=\frac{S}{\tau_a}(1-\frac{P}{P_{sat}})-\frac{P_s}{\tau_d}$$
+$$\frac{P_s}{\tau_d}=\frac{S}{\tau_a}(1-\frac{P}{P_{sat}})$$
+$$P_s=S\frac{\tau_d}{\tau_a}(1-\frac{P}{P_{sat}})$$
+
+Similarlly
+$$P_c=C\frac{\tau_d}{\tau_a}(1-\frac{P}{P_{sat}})$$
+
+Overall:
+$$B = I \tau_B (\epsilon_{cue}-p) $$
+$$E = I p \tau_E $$
+$$S = \frac{k}{\tau_B (\epsilon_{cue}-p) v - 1}$$
+$$C = \frac{k_m \rho_c}{p \tau_E v_m - \rho_c}$$
+$$P = (S+C) \frac{P_{sat}\tau_d}{(S+C)\tau_d + \tau_a P_{sat}}$$
+$$P_s = S\frac{\tau_d}{\tau_a}(1-\frac{P}{P_{sat}})$$
+$$P_c = C\frac{\tau_d}{\tau_a}(1-\frac{P}{P_{sat}})$$
+
+```{r BECSP, eval=FALSE}
+source('R/BECSP.R')
+parms <- list(vmax_up=0.1, km_up=1, enz_prod=0.1, 
+              vmax_enz=0.4, km_enz=2, cue=0.75, 
+              enz_cost=sqrt(0.5)*0.9, 
+              tau_B=100, tau_E=200, 
+              P_sat=100, tau_a=1e4, tau_d=5e4,
+              inputC=0.1, rho_c=0.7)
+y0 <- unlist(list(B=0.8, E=0.1, S=0.5, C=10, P_S=100, P_C=100))
+#temp <- dBECSP_dt(t=0, y=y0, parms)
+SS <- stode(y=y0, func=dBECSP_dt, parms=parms, pos=TRUE)
+SS_analytical <- SS_BECSP(parms)
+
+print(SS)
+print(SS_analytical)
 ```
 
 ```{r BECS}
 source('R/BECS.R')
-parms <- list(vmax_up=0.1, km_up=1, enz_prod=0.1, 
-              vmax_enz=0.4, km_enz=2, cue=0.75, 
-              death=100, E_turnover=200, inputC=0.1)
-SOC_0 <- unlist(list(B=0.8, E=0.1, S=0.5, C=10))
-temp <- dBECS_dt(t=0, y=SOC_0, parms)
-SS <- stode(y=SOC_0, func=dBECS_dt, parms=parms, pos=TRUE)
-SS_analytical <- SS_BECS(parms)
+#Assert enz_cost 
+with(parms, {sqrt(0.5) > enz_cost})
+with(parms, {cat((2*enz_cost+1)*(1+enz_cost)/enz_cost); cue > (2*enz_cost-1)*(1+enz_cost)/enz_cost})
 
-print(SS)
-print(SS_analytical)
+#Theoretical production rate
+with(parms, {(enz_cost*cue-(1+enz_cost))/(2*(1+enz_cost)*enz_cost)})
 
-enz_prodResponse <- adply(seq(0, 1, by=0.001), c(1), function(xx){
+enz_prodResponse <- adply(seq(0, sqrt(0.5), by=0.01), c(1), function(xx){
   parms$enz_prod <- xx
   ans <- SS_BECS(parms)
   return(data.frame(enz_prod=xx, B=ans$B, S=ans$S))
@@ -40,11 +134,12 @@ X 1) Calculate max from biomass from enz_prod variation from 0 to 1
 2) Iterate through parameter space
 3) Plot max biomass for parameter space
 
-```{r sample}
+```{r sample, eval=FALSE}
 parmRange <- read.csv('data/JAM_params.csv', stringsAsFactors=FALSE)
 nameKey <- list(vmax_up='v_up', km_up='k_up', enz_prod='enz_prod', 
               vmax_enz='v_enz', km_enz='k_enz', cue='cue', 
-              death='tau_B', E_turnover='tau_B', inputC=NA)
+              death='tau_B', E_turnover='tau_B', 
+              enz_cost='enz_cost', inputC=NA)
 nameKey <- data.frame(varName = names(nameKey), parameter = unlist(nameKey), stringsAsFactors=FALSE)
 parmRange <- merge(nameKey, parmRange, all.x=TRUE)
 
@@ -53,7 +148,7 @@ parmRange[parmRange$varName %in% 'inputC', c('unit')] <- 'kg-C m^-3-soil hr^-1'
 
 parmRange <- parmRange[parmRange$varName %in% c('enz_prod', 'km_up', 'vmax_up', 'death', 'cue', 'inputC'),]
 
-sampleNum <- 10000
+sampleNum <- 100
 unifSample <- as.data.frame(improvedLHS(sampleNum, dim(parmRange)[1]))
 names(unifSample) <- parmRange$varName
 unifSample$index <- 1:sampleNum
@@ -62,13 +157,65 @@ trueSample <- ddply(unifSample, c('index'), function(xx){
   parSet <- xx[parmRange$varName]
   ans <- as.list(exp(log(parmRange$min) + 
                        log(parmRange$max / parmRange$min) * unlist(parSet)))
-  temp <- SS_BECS(ans)
-  ans$B <- temp$B
-  ans$S <- temp$S
-  #ans$maxB <- max_Bs_BECS(ans)
   return(as.data.frame(ans))
 })
 
-trueSample[parmRange$varName] < parmRange$min
+runSample <- ddply(trueSample, c('index'), function(xx){
+  ans <- xx[parmRange$varName]
+  temp <- SS_BECS(ans)
+  ans$B <- temp$B
+  ans$S <- temp$S
+  if(all(temp > 0)){
+    ans$maxB <- max_Bs_BECS(ans)
+  }else{
+    ans$maxB <- NA
+  }
+})
+
+ggplot(trueSample) + geom_point(aes(x=B, y=S))
+
+summary(with(trueSample, {(1-enz_prod)/(cue-enz_prod) < 1}))
+summary(with(trueSample, {death*vmax_up*(cue-enz_prod)}))
+
+unifSample <- merge(unifSample, trueSample[,c('index', 'maxB')])
+plot.df <- melt(unifSample, id.vars=c('index', 'maxB'))
+ggplot(plot.df) + geom_histogram(aes(x=value, fill=is.finite(maxB))) + facet_wrap(~variable)
+
+pairs(subset(unifSample, is.finite(maxB), select=c("cue", "km_up", "death", "vmax_up", "inputC", 'enz_prod')))
+```
+
+```{r BE, eval=FALSE}
+source('R/BE.R')
+y0 <- c(B=28, E=1.4)
+ans <- data.frame()
+for(p in seq(0, 1, by=0.01)){
+parms <- list(cue=0.5, tau_B=5000, tau_E=1000, p=p, v=0.0277, k=0.3)
+
+SS <- stode(y=y0, func=dBE_dt, parms=parms)
+ans <- rbind(ans, data.frame(type='stode', p=p, B=SS$y[1], E=SS$y[2]))
+
+SS <- BE_SS(parms)
+ans <- rbind(ans, data.frame(type='analytical', p=p, B=SS$B, E=SS$E))
+}
+ggplot(ans) + geom_line(aes(x=p, y=B)) + facet_wrap(~type, scale='free')
+
+
+```
+
+```{r BEC, eval=FALSE}
+source('R/BEC.R')
+y0 <- c(B=28, E=1.4, C=10)
+parms <- list(cue=0.5, tau_B=85, tau_E=10, p=0.1, v=0.01, k=0.3, input=0.1)
+SS <- stode(y=y0, func=dBEC_dt, parms=parms)
+#temp <- lsoda(times=seq(0, 1e4), y=y0, func=dBEC_dt, parms=parms)
+
+ans <- data.frame()
+for(p in seq(0, 1, by=0.01)){
+parms$p <- p
+SS <- stode(y=y0, func=dBEC_dt, parms=parms)
+ans <- rbind(ans, data.frame(type='stode', p=p, B=SS$y[1], E=SS$y[2]))
+
+}
+ggplot(ans) + geom_line(aes(x=p, y=B)) + facet_wrap(~type, scale='free')
 
 ```
