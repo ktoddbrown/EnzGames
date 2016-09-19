@@ -4,29 +4,13 @@ author: "K Todd-Brown (ktoddbrown@gmail.com)"
 date: "September 14, 2016"
 output: html_document
 ---
-
+![](notes/2016September_meeting.jpg)
 ```{r}
-source('R/BECS.R')
-parms <- list(inputC=1, loss=0.002, cue=0.3, cue_enz=0.3, 
-     death=1/0.01, E_turnover=1/0.01, 
-     vmax_enz=1, km_enz=6, km_up=0.3, vmax_up=0.04, enz_prod=0.09)
-y0 <- c(B=28, E=1.4, C=10, S=1)
-test <- stode(y=y0, func=dBECS_dt, parms=parms)
-
-temp <- ddply(data.frame(enz_prod=seq(0, 1, length=1e3)), c('enz_prod'), function(xx){
-  parms$enz_prod <- xx$enz_prod
-  #ans <- stode(y=y0, func=dBECS_dt, parms=parms)$y
-  ans <- as.data.frame(SS_BECS(parms))
-  return(ans)
-})
-ggplot(temp) + geom_point(aes(x=enz_prod, y=B)) + ylim(0,100)
-
-temp <- melt(temp, id.vars='enz_prod')
-ggplot(temp) + geom_point(aes(x=enz_prod, y=value, color=value < 0)) + facet_wrap(~variable) + geom_hline(yintercept=0) + ylim(-10, 100) + xlim(0.1131131, 0.1661662)
-```
-
-```{r}
-parm <- list(h=1e-2, k=10, I=0.4, m=0.001)
+library(assertthat)
+library(reshape2)
+library(ggplot2)
+library(plyr)
+parm <- list(h=1e-2, k=10, I=0.6, m=0.001)
 ##Cap m < 0.2
 ##cue/h < 0.05
 parm$a <- with(parm, 100*h*(k+100)/100)
