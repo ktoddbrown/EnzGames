@@ -2,3 +2,7 @@
 .Rhistory
 .RData
 *.Rproj
+*_cache
+*_files
+temp/*
+*.RData
