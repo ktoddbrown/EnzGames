@@ -10,15 +10,17 @@ library(assertthat)
 library(reshape2)
 library(ggplot2)
 library(plyr)
-parm <- list(h=1e-2, k=10, I=0.6, m=0.001)
-##Cap m < 0.2
-##cue/h < 0.05
-parm$a <- with(parm, 100*h*(k+100)/100)
-parm$b <- 5
 
+#h: death rate
+#k: half-sat of Monod growth
+#I: input rate
+#m: leach rate of substrate pool
+parm <- list(h=1e-2, k=10, I=0.6, m=0.001)
+parm$a <- with(parm, 100*h*(k+100)/100) #max v
+parm$b <- 5 #strength of slope 0 to 100
 steady.state <- data.frame(cue=seq(0, 1, length=1e2))
-#steady.state$v <- with(parm, b-a*steady.state$cue)
-steady.state$v <- with(parm, a*exp(-b*steady.state$cue))
+steady.state$v <- with(parm, a*(exp(-b*steady.state$cue)-exp(-1))/(exp(0)-exp(-1)))
+
 steady.state$check.C <- steady.state$cue*steady.state$v > parm$h
 steady.state$check.B <- steady.state$cue*steady.state$v > with(parm, m*k*h/I+h)
 summary(steady.state)
