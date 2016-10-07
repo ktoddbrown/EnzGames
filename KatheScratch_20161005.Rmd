@@ -1,0 +1,185 @@
+---
+title: "KatheScratch_20160914"
+author: "K Todd-Brown (ktoddbrown@gmail.com)"
+date: "September 14, 2016"
+output: html_document
+---
+
+```{r}
+library(assertthat)
+library(reshape2)
+library(ggplot2)
+library(plyr)
+library(rootSolve)
+library(deSolve)
+```
+
+```{r}
+cue_v_tradeoff <- function(b, vmax, cue){return(vmax*(exp(-b*cue)-exp(-b))/(exp(0)-exp(-b)))}
+tradeoff.df <- data.frame(cue=seq(0,1, length=100), 
+           'b=0.1'= cue_v_tradeoff(b=0.1, vmax=2, cue=seq(0,1, length=100)),
+           'b=1'= cue_v_tradeoff(b=1, vmax=2, cue=seq(0,1, length=100)),
+           'b=10'= cue_v_tradeoff(b=10, vmax=2, cue=seq(0,1, length=100)))
+ggplot(melt(tradeoff.df, id.vars=c('cue'))) +geom_line(aes(x=cue, y=value, color=variable)) + labs(y='vmax')
+```
+
+First let's try to calculate reasonable loss and uptake rates for the input and soil carbon stock targets for one population.
+```{r pullTargets}
+
+##Input between 0.1 to 10 mg/g*day
+##SOC (B+C) between 10 to 500 mg/g
+##B:SOC between 0.001 to 0.15
+
+##for inputs to match outputs at (10, 500)/tau_exit=(0.1, 10)
+##tau_exit = (1, 5000) which now constrains 1/m and 1/h
+##k should be order of mag around (10, 500)
+
+#h: death rate
+#k: half-sat of Monod growth
+#I: input rate
+#m: leach rate of substrate pool
+
+ncuts <- 100
+parm.df <- list(I=c(0.1, 1, 10), 
+                C=c(10, 50, 100, 500),
+                B_rel=c(0.1, 1, 5, 15)/100, #biomass percent of total SOC = B+C
+                b=c(0.1, 1, 10),
+                cue=seq(0.01, 0.99, length=ncuts),
+                m_rel=c(0.01, 0.1, 0.5, 0.99),
+                vmax_rel=c(1.1, 5, 10, 50, 100))
+parm.df$B_rel <- parm.df$B_rel/(1-parm.df$B_rel) #biomass as percentage of C
+
+steady.state <- expand.grid(parm.df)
+
+steady.state$m <- with(steady.state, I/C*m_rel)
+steady.state$B <- with(steady.state, B_rel*C)
+steady.state$h <- with(steady.state, cue/B_rel*(I/C-m))
+steady.state$vmax <- with(steady.state, h/cue*vmax_rel)
+steady.state$v <- with(steady.state, cue_v_tradeoff(b, vmax, cue))
+steady.state$k <- with(steady.state, C/h*(cue*v-h))
+
+quantPar <- apply(subset(steady.state, k>0), 2, quantile, na.rm=TRUE)
+```
+
+Then use those targets to generate parameters and solve for the 'best' cue numerically.
+```{r bestCUE}
+ncuts <- 50
+parm.df <- list(I=c(0.1, 1, 10), 
+                cue=seq(0.01, 0.99, length=ncuts),
+                m = exp(seq(log(quantPar['25%', 'm']), log(quantPar['75%', 'm']), length=5)),
+                h = exp(seq(log(quantPar['25%', 'h']), log(quantPar['75%', 'h']), length=10)),
+                k = exp(seq(log(quantPar['25%', 'k']), log(quantPar['75%', 'k']), length=5)),
+                b=c(0.1, 1, 10),
+                vmax=exp(seq(log(quantPar['25%', 'vmax']), log(quantPar['75%', 'vmax']), length=5)))
+          
+steady.state <- expand.grid(parm.df)
+steady.state$v <- with(steady.state, cue_v_tradeoff(b, vmax, cue))
+steady.state$C <- with(steady.state, h*k/(cue*v-h))
+steady.state$B <- with(steady.state, cue/h*(I-m*C))
+
+realisticSOC <- subset(steady.state, B/(B+C) < 0.15 & B/(B+C) > 0.01 & B+C > 10 & B+C < 500 & B >0 & C > 0)
+uniquePars <- unique(subset(realisticSOC, select=c('I', 'm', 'h', 'k', 'b', 'vmax')))
+cueCount <- ddply(realisticSOC, c('I', 'm', 'h', 'k', 'b', 'vmax'),
+                  function(xx){return(c(numValidCUE=length(xx$cue)))})
+cueCount <- cueCount[order(cueCount$numValidCUE, decreasing=TRUE),]
+cueCount$validIndex <- 1:(dim(cueCount)[1])
+
+steady.state <- merge(steady.state, cueCount, all.x=TRUE)
+
+bestCUE <- ddply(subset(steady.state, is.finite(validIndex) & C > 0 & B > 0), c('validIndex'), function(xx){
+  ans <- xx[which.max(xx$B),]
+  return(ans)
+})
+
+head(bestCUE)
+summary(bestCUE)
+```
+
+Then pick a parameter set which generated 'valid' soil carbon pools for a broad range of cue values. And explore the invasion consiquences across a wide range of cue (and thus vmax) values for both the native and invation population.
+```{r invade}
+
+temp <- subset(steady.state, validIndex == 2)
+ggplot(temp) + geom_point(aes(x=cue, y=B))
+
+native <- subset(bestCUE, validIndex == 2)
+print(native)
+cueRange <- range(subset(steady.state, validIndex ==2 & B/(B+C) < 0.15 & B/(B+C) > 0.01 & 
+                     B+C > 10 & B+C < 500 & B >0 & C > 0, select='cue'))
+
+ans <- data.frame()
+parmArr <- data.frame()
+for(ii in 1:1e4){
+  cue <- runif(2, min=cueRange[1], max=cueRange[2])
+  
+  parm <- as.list(subset(native, select=-C:-B))
+  parm$index <- ii
+  parm$cue2 <- cue[2]
+  if(FALSE){ #go native
+    parm$cue1 <- parm$cue#cue[1]
+  }else{ #randomize
+    parm$cue1 <- cue[1]
+  }
+  
+  parm$v2 <- cue_v_tradeoff(b=parm$b, vmax=parm$vmax, cue=parm$cue2)
+  parm$v1 <- cue_v_tradeoff(b=parm$b, vmax=parm$vmax, cue=parm$cue1)
+ 
+  parm$C.ss <- with(parm, h*k/(cue1*v1-h))
+  parm$B1.ss <- with(parm, cue1/h*(I-m*C.ss))
+  
+  dC <- function(t, y, parms){
+    #y[y < 0] <- 0
+    B1 <- y[1]; B2 <- y[2]; C <- y[3]
+    #cat('leacing: ',with(parms, C*m), '\n')
+    #cat('uptake: ', with(parms, C*(v1*B1+v2*B2)/(k+C)), '\n')
+    ans <- with(parms,{
+      c(B1=B1*(cue1*v1*C/(k+C) - h), 
+        B2=B2*(cue2*v2*C/(k+C) - h),  
+        C=I-C*(m+(v1*B1+v2*B2)/(k+C)))#,
+        #Cout = C*m+B1*((1-cue1)*v1*C/(k+C) + h) + B2*((1-cue2)*v2*C/(k+C) + h),
+        #Cin = I)
+    })
+    names(ans) <- c('B1', 'B2', 'C')#, 'Cout', 'Cin')
+  return(list(ans))
+  }
+  
+  timearr <- c(0:7, (1:12)*30, 365*(1:10), 365*10*(2:10))
+  evolution <- lsoda(y=c(B1=parm$B1.ss, B2=parm$B1.ss*0.1, C=parm$C.ss), 
+                     times=timearr, func=dC, parms=parm)
+  #ggplot(melt(as.data.frame(evolution), id.vars='time')) + geom_line(aes(x=time, y=value, color=variable))
+  
+  temp <- as.data.frame(evolution)
+  temp[abs(temp) < 1e-8] <- 0 #cut off absolute tol
+  temp$time <- timearr
+  temp$index <- ii
+  if(any(temp[length(timearr), c('B1', 'B2', 'C')] < 0)) {
+    parm$winner <- 'NA'
+  }else{
+    parm$winner <-  c('B1', 'B2')[which.max(temp[length(timearr), c('B1', 'B2')])]
+  }
+  parmArr <- rbind.fill(parmArr, as.data.frame(parm))
+  
+  ans <- rbind.fill(ans, temp)
+}
+parmArr$winner <- as.factor(as.character(parmArr$winner))
+save.image('KatheScratch_20161005_image.RData')
+```
+```{r invasionFig}
+plotdf <- melt(ans, id.vars=c('time', 'index'))
+ggplot(plotdf) + geom_line(aes(x=time, y=value, group=index), alpha=0.1) + facet_wrap(~variable, scale='free') + scale_x_log10()
+
+temp <- subset(ans, time==max(time))
+ggplot(temp) + geom_point(aes(x=B1, y=B2))
+temp$B1_frac <- temp$B1/(temp$B1+temp$B2)
+temp <- merge(temp, parmArr[, c('index', 'cue1', 'cue2')]) 
+ggplot(temp) + geom_point(aes(x=cue1, y=cue2, color=B1_frac, alpha=-abs(B1_frac-0.5))) + geom_point(data=subset(temp, B1 < 0 | B2 < 0 | C < 0 ), aes(x=cue1, y=cue2), color='black')+ scale_colour_gradientn(colours = rainbow(7)) 
+```
+
+```{r winnerFig}
+winnerFig <- ggplot(parmArr) + geom_point(aes(x=cue1, y=cue2, color=winner)) + geom_abline(slope=1) + geom_vline(xintercept=native$cue, color='red') + labs(x='native (B1) CUE', y='invader (B2) CUE')
+
+#winnerFig_3pane <- ggplot(parmArr) + geom_point(data=parmArr[,c('cue1', 'cue2')], aes(x=cue1, y=cue2),color='lightgrey')+ geom_point(aes(x=cue1, y=cue2, color=winner)) + geom_abline(slope=1) + geom_vline(xintercept=native$cue, color='red') + labs(x='native (B1) CUE', y='invader (B2) CUE') + facet_wrap(~winner)
+
+print(winnerFig)
+ggsave(winnerFig, filename='temp/winner.pdf')
+```
+Figure: The winner of the invation at the end of the time (`r max(timearr)/365` years) is either the native population (B1, pink), invader (B2, blue), or model crash (grey). All parameters between the population are the same, except for their carbon use effiency (cue) and resulting maximum growth rate (v) with shared from trade-off function. The red line is the optimal native cue given no competition. The black line is a reference 1:1.
