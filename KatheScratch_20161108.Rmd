@@ -2,24 +2,52 @@
 title: "KatheScratch_20160914"
 author: "K Todd-Brown (ktoddbrown@gmail.com)"
 date: '`r Sys.Date()`'
-output: html_document
+output: 
+  html_document: 
+    toc: yes
 ---
-![](notes/2016September_meeting.jpg)
 
-```{r}
+#Basic model description
+```{r modelPic, out.width='30%', echo=FALSE}
+library(knitr)
+include_graphics('notes/2016September_meeting.jpg')
+```
+
+#Target parameters to hit carbon targets
+```{r parmPic, out.width='30%', echo=FALSE}
+library(knitr)
+include_graphics('notes/TradeOff_targetParm.jpg')
+```
+
+#Competition model with co-existance derivation
+```{r coExPic, out.width='30%', echo=FALSE}
+library(knitr)
+include_graphics('notes/TradeOff_stableSurface.jpg')
+```
+
+#Analysis code
+
+##Set up
+```{r setup}
 library(assertthat)
 library(reshape2)
 library(ggplot2)
 library(plyr)
 library(rootSolve)
 library(deSolve)
+library(knitr)
+library(cowplot)
 
 sourceFiles <- 'R/invasion.R'
 l_ply(sourceFiles, source)
 ```
 
+##Visualize trade-off between cue and v
 ```{r tradeoff}
-cue_v_tradeoff <- function(b, vmax, cue){return(vmax*(exp(-b*cue)-exp(-b))/(exp(0)-exp(-b)))}
+cue_v_tradeoff <- function(b, vmax, cue){
+  return(vmax*(exp(-b*cue)-exp(-b))/(exp(0)-exp(-b)))
+}
+
 tradeoff.df <- adply(.data=c(0.1*1:9, 1:10), .margins=c(1), .id=c('id'), .fun=function(b){
   ans <- data.frame(b=b, cue=seq(0, 1, length=1000))
   ans$v <- cue_v_tradeoff(b=b, vmax=2, cue=ans$cue)
@@ -27,8 +55,15 @@ tradeoff.df <- adply(.data=c(0.1*1:9, 1:10), .margins=c(1), .id=c('id'), .fun=fu
 })
 
 ggplot(tradeoff.df) +geom_line(aes(x=cue, y=v, color=b))
+```
 
-
+##Find strategic CUE
+```{r stratCUE}
+tradeoff.df <- adply(.data=c(0.1,1,10), .margins=c(1), .id=c('id'), .fun=function(b){
+  ans <- data.frame(b=b, cue=seq(0, 1, length=1000))
+  ans$v <- cue_v_tradeoff(b=b, vmax=2, cue=ans$cue)
+  return(ans)
+})
 strategic_cue <- ddply(tradeoff.df, c('b'), summarize, cue=cue[which.max(cue*v)])
 
 co_cue <- ddply(tradeoff.df, c('b'), function(xx){
@@ -45,20 +80,26 @@ co_cue <- ddply(tradeoff.df, c('b'), function(xx){
 temp <- ddply(co_cue, c('b'), function(xx){
   return(xx[sample.int(dim(xx)[1], size=1),])
 })
-# ggplot(tradeoff.df) +geom_point(aes(x=cue, y=cue*v, color=as.factor(b))) + 
-#   geom_vline(data=strategic_cue, aes(xintercept=cue, color=as.factor(b))) +
-#   geom_vline(data=temp, aes(xintercept=cue, color=as.factor(b)), linetype='dotted') +
-#   geom_vline(data=temp, aes(xintercept=cue.pair, color=as.factor(b)), linetype='dotted') +
-#   geom_hline(data=temp, aes(yintercept=cue*v, color=as.factor(b)), linetype='dotted')
+ ggplot(tradeoff.df) +geom_point(aes(x=cue, y=cue*v, color=as.factor(b))) + 
+   #geom_vline(data=strategic_cue, aes(xintercept=cue, color=as.factor(b))) +
+   geom_vline(data=temp, aes(xintercept=cue, color=as.factor(b)), linetype='dotted') +
+   geom_vline(data=temp, aes(xintercept=cue.pair, color=as.factor(b)), linetype='dotted') +
+   geom_hline(data=temp, aes(yintercept=cue*v, color=as.factor(b)), linetype='dotted') +
+   labs(title='CUE with same CUE*v values can co-exist')
 
 ggplot(co_cue) + geom_line(aes(x=cue, y=cue.pair, color=as.factor(b))) + 
   geom_line(aes(x=cue.pair, y=cue, color=as.factor(b))) +
   geom_point(data=strategic_cue, aes(x=cue, y=cue, color=as.factor(b))) +
-  geom_abline(slope=1, intercept=0)
+  geom_abline(slope=1, intercept=0) + labs(title='Co-existance lines for two populations',
+                                           y='Population 1 [carbon use effiency]',
+                                           x='Population 2 [carbon use effiency]')
 
 ```
 
-First let's try to calculate reasonable loss and uptake rates for the input and soil carbon stock targets for one population.
+#Pull target parameters
+First let's try to calculate reasonable loss and uptake rates for the input (0.1 to 10 mg/g/day), soil carbon stock targets (SOC between 10 and 500 mg/g) and biomass (1 to 15 %) for one population.
+
+
 ```{r pullTargets}
 
 ##Input between 0.1 to 10 mg/g*day
@@ -75,33 +116,37 @@ First let's try to calculate reasonable loss and uptake rates for the input and 
 #m: leach rate of substrate pool
 
 ncuts <- 100
-parm.df <- list(I=c(0.1, 1, 10), 
-                C=c(10, 50, 100, 500),
+parm.df <- list(I=c(0.1, 1, 10), #input
+                C=c(10, 50, 100, 500), #SOC
                 B_rel=c(0.1, 1, 5, 15)/100, #biomass percent of total SOC = B+C
-                b=c(0.1, 1, 10),
-                cue=seq(0.01, 0.99, length=ncuts),
-                m_rel=c(0.01, 0.1, 0.5, 0.99),
-                vmax_rel=c(1.1, 5, 10, 50, 100))
+                b=c(0.1, 1, 10), #trade-off decay
+                cue=seq(0.01, 0.99, length=ncuts), #carbon use effiency
+                m_rel=c(0.01, 0.1, 0.5, 0.99), #loss rate relative to system input
+                vmax_rel=c(1.1, 5, 10, 50, 100)) #maximum uptake for trade-off relative loss
+
 parm.df$B_rel <- parm.df$B_rel/(1-parm.df$B_rel) #biomass as percentage of C
 
 steady.state <- expand.grid(parm.df)
+steady.state$m <- with(steady.state, I/C*m_rel) #set C loss rate relative to input rate
+steady.state$B <- with(steady.state, B_rel*C) #set biomass relative to C
 
-steady.state$m <- with(steady.state, I/C*m_rel)
-steady.state$B <- with(steady.state, B_rel*C)
-steady.state$h <- with(steady.state, cue/B_rel*(I/C-m))
-steady.state$vmax <- with(steady.state, h/cue*vmax_rel)
-steady.state$v <- with(steady.state, cue_v_tradeoff(b, vmax, cue))
-steady.state$k <- with(steady.state, C/h*(cue*v-h))
+steady.state$h <- with(steady.state, cue/B_rel*(I/C-m)) ##set from target parm analysis
+steady.state$vmax <- with(steady.state, h/cue*vmax_rel) #set vmax
+steady.state$v <- with(steady.state, cue_v_tradeoff(b, vmax, cue)) #calc v from tradeoff
+steady.state$k <- with(steady.state, C/h*(cue*v-h)) ##set from target parm analysis
 
+##recalculate strategic CUE from new parmaeter set
 strategic_cue <- ddply(steady.state, c('b'), summarize, cue=cue[which.max(cue*v)])
 
+##get bounds for target
 quantPar <- apply(subset(steady.state, k>0), 2, quantile, na.rm=TRUE)
+kable(quantPar)
 ```
 
 Then use those targets to generate parameters and solve for the 'best' cue numerically.
-```{r bestCUE}
+```{r bestCUE, cache=TRUE}
 ncuts <- 50
-parm.df <- list(I=c(0.1, 1, 10), 
+parm.df <- list(I=c(0.1*(1:9), 1:10), 
                 cue=seq(0.01, 0.99, length=ncuts),
                 m = exp(seq(log(quantPar['25%', 'm']), log(quantPar['75%', 'm']), length=5)),
                 h = exp(seq(log(quantPar['25%', 'h']), log(quantPar['75%', 'h']), length=10)),
@@ -135,76 +180,71 @@ bestCUE <- ddply(subset(steady.state, is.finite(validIndex) & C > 0 & B > 0), c(
 })
 
 bestCUE <- merge(bestCUE, strategic_cue, by=c('b'), suffixes=c('', '.strategic'))
-head(bestCUE)
-summary(bestCUE)
+bestCUE <- bestCUE[order(bestCUE$validIndex),]
+
+kable(head(bestCUE))
+kable(summary(bestCUE))
 ```
 
-Then pick a parameter set which generated 'valid' soil carbon pools for a broad range of cue values. And explore the invasion consiquences across a wide range of cue (and thus vmax) values for both the native and invation population.
-```{r invade}
+#Numerical validate strategic CUE with 100 yr invasion model
+Pick several parameter sets which generated 'valid' soil carbon pools for a broad range of cue values (ie high numValidCUE). And explore the invasion consiquences across a wide range of cue (and thus vmax) values for both the native and invation population. Compare this to the previously calculated stategic cue values.
+```{r invade, cache=TRUE}
 
-temp <- subset(steady.state, validIndex == 2)
-ggplot(temp) + geom_point(aes(x=cue, y=B))
+ggplot(subset(steady.state, validIndex %in% 1:9)) + 
+  geom_line(aes(x=cue, y=B, group=validIndex)) + 
+  labs(title='Steady state biomass across cue for diff. par. sets')
 
-invaded <- dlply(subset(bestCUE, validIndex %in% 1:10), c('validIndex'), function(native){
+invaded <- dlply(subset(bestCUE, validIndex %in% 1:9), c('validIndex'), function(native){
   #native <- subset(bestCUE, validIndex == 4)
-  print(native)
+  #print(native)
   cueRange <- range(subset(steady.state, validIndex == native$validIndex & 
                              B/(B+C) < 0.15 & B/(B+C) > 0.01 & 
                              B+C > 10 & B+C < 500 & B >0 & C > 0, select='cue'))
   
   
-  invasion_100yr <- adply(1:5e2, 1, function(ii){
+  invasion_100yr <- adply(1:1e2, 1, function(ii){
     parm <- as.list(subset(native, select=-C:-B))
-    parm$index <- ii
+    parm$index <- sprintf('broad.%d', ii)
     
     parm$cue1 <- runif(1, max=max(cueRange), min=min(cueRange))
     parm$cue2 <- parm$cue1+rnorm(1,mean=0, sd=0.05)
-    return(invasion(parm=parm, tradeoff=cue_v_tradeoff))
+    ans <- invasion(parm=parm, tradeoff=cue_v_tradeoff)
+    
+    parm$index <- sprintf('narrow.%d', ii)
+    parm$cue1 <- rnorm(1, mean=native$cue.strategic, sd=0.05)
+    parm$cue2 <- parm$cue1+rnorm(1,mean=0, sd=0.05)
+    ans <- rbind.fill(ans, invasion(parm=parm, tradeoff=cue_v_tradeoff))
+    return(ans)
   })
   
-  invasion_100yr$cue1_cut <- cut(invasion_100yr$cue1, breaks=20)
-  cutStats <- ddply(invasion_100yr, 'cue1_cut', summarize, count = length(cue1), 
-                    B1_zero=sum(B1==0), B2_zero=sum(B2==0),
-                    cue1.min=min(cue1), cue1.max=max(cue1))
+  winner.pl <- ggplot(invasion_100yr) + 
+    geom_point(aes(x=cue1, y=cue2, color=B1/(B1+B2))) + 
+    geom_vline(data=native, aes(xintercept=cue), color='red') + 
+    geom_vline(data=native, aes(xintercept=cue.strategic), color='orange') +
+    labs(title=sprintf('Valid Index: %d', native$validIndex), x='Native CUE (B1)',
+         y='Invader CUE (B2)')
   
-  restrictedCUE <- c(min(subset(cutStats, B1_zero == min(B1_zero), cue1.min)),
-                     max(subset(cutStats, B1_zero==min(B1_zero), cue1.max)))
-  invasion_100yr <- rbind.fill(invasion_100yr,
-                               adply(1:1e2, 1, function(ii){
-                                 parm <- as.list(subset(native, select=-C:-B))
-                                 parm$index <- ii
-                                 parm$cue1 <- runif(1, max=restrictedCUE[2], min=restrictedCUE[1])
-                                 parm$cue2 <- parm$cue1+rnorm(1,mean=0, sd=0.01)
-                                 return(invasion(parm=parm, tradeoff=cue_v_tradeoff))
-                               }))
-  
-  invasion_100yr$cue1_cut <- cut(invasion_100yr$cue1, breaks=50)
-  cutStats <- ddply(subset(invasion_100yr, cue1 > restrictedCUE[1] & cue1 < restrictedCUE[2]),
-                    'cue1_cut', summarize, count = length(cue1), 
-                    B1_zero=sum(B1==0), B2_zero=sum(B2==0),
-                    B1_wins=sum(B1>B2), B2_wins=sum(B1<B2),
-                    cue1.min=min(cue1), cue1.max=max(cue1))
-  
-  winner.pl <- ggplot(invasion_100yr) + geom_rect(aes(ymin=min(cueRange), ymax=max(cueRange), 
-                                                      xmax=max(subset(cutStats, B1_zero==min(B1_zero), cue1.max)), 
-                                                      xmin=min(subset(cutStats, B1_zero==min(B1_zero), cue1.min))),
-                                                  fill='lightgrey') +
-    geom_point(aes(x=cue1, y=cue2, color=B1/(B1+B2))) +
-    geom_vline(aes(xintercept=cue), color='red') + geom_vline(data=subset(strategic_cue, b==native$b), aes(xintercept=cue), color='orange')
-  
-  cueWinners <- data.frame(validIndex=native$validIndex,
-                           lower=min(cueRange),
-                           upper=max(cueRange),
-                           B1_minCount=min(cutStats$B1_zero),
-                           stategic.min=min(subset(cutStats, B1_zero==min(B1_zero), cue1.min)),
-                           stategic.max=max(subset(cutStats, B1_zero==min(B1_zero), cue1.max)),
-                           optimal = native$cue)
-  
-  return(list(pl=winner.pl, summary=cueWinners))
+  return(winner.pl)
 })
 
-for(ii in 1:10){
-  print(invaded[[ii]]$pl)
-}
-save.image('KatheScratch_20161108_image.RData')
+kable(subset(bestCUE, validIndex %in% 1:9))
+plot_grid(plotlist=invaded, ncol=3)
+```
+Figure capture: The red line is the optimal CUE without competition. The orange line is the stategic CUE with competition. Blue dots represent the relative percentatve of the native population (B1) at the end of 100 years.
+
+#Examin effects of input on optimal CUE
+```{r}
+I_cue_index <- unique(bestCUE[, c('b', 'm', 'h', 'k', 'vmax')])
+I_cue_index$I_cue_index <- 1:(dim(I_cue_index)[1])
+temp <- merge(subset(I_cue_index,I_cue_index %in% sample(length(I_cue_index), 50)), bestCUE)
+
+ggplot(temp) + 
+  geom_point(aes(x=I, y=cue)) +
+  geom_line(aes(x=I, y=cue, group=I_cue_index)) +
+  labs(y='Optimal CUE', I='Input')
+```
+
+#Helper files
+```{r helpers, comment=''}
+l_ply(sourceFiles, function(xx){cat(readLines(xx), sep='\n')})
 ```
