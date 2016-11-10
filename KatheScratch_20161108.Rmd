@@ -188,7 +188,7 @@ kable(summary(bestCUE))
 
 #Numerical validate strategic CUE with 100 yr invasion model
 Pick several parameter sets which generated 'valid' soil carbon pools for a broad range of cue values (ie high numValidCUE). And explore the invasion consiquences across a wide range of cue (and thus vmax) values for both the native and invation population. Compare this to the previously calculated stategic cue values.
-```{r invade, cache=TRUE}
+```{r invade, cache=TRUE, fig.width=12}
 
 ggplot(subset(steady.state, validIndex %in% 1:9)) + 
   geom_line(aes(x=cue, y=B, group=validIndex)) + 
@@ -230,6 +230,7 @@ invaded <- dlply(subset(bestCUE, validIndex %in% 1:9), c('validIndex'), function
 kable(subset(bestCUE, validIndex %in% 1:9))
 plot_grid(plotlist=invaded, ncol=3)
 ```
+
 Figure capture: The red line is the optimal CUE without competition. The orange line is the stategic CUE with competition. Blue dots represent the relative percentatve of the native population (B1) at the end of 100 years.
 
 #Examin effects of input on optimal CUE
