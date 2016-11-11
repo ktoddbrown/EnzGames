@@ -20,7 +20,8 @@ invasion <- function(parm, tradeoff, rel_invader=0.1, timeFlag=c('all', 'last')[
   
   #evolution <- lsoda(y=c(B1=parm$B1.ss, B2=parm$B1.ss*rel_invader, C=parm$C.ss), 
   #                                      times=timearr, func=dC, parms=parm)
-  evolution <- tryCatch(lsoda(y=c(B1=parm$B1.ss, B2=parm$B1.ss*rel_invader, C=parm$C.ss),                   times=timearr, func=dC, parms=parm),
+  evolution <- tryCatch(lsoda(y=c(B1=parm$B1.ss, B2=parm$B1.ss*rel_invader, C=parm$C.ss),
+                              times=timearr, func=dC, parms=parm),
                         warning=function(w){return(data.frame(time=NA))},
            error=function(e){return(data.frame(time=NA))})
   #print(evolution)
