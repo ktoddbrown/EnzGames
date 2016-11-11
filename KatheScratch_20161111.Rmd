@@ -195,7 +195,7 @@ kable(summary(bestCUE))
 Pick several parameter sets which generated 'valid' soil carbon pools for a broad range of cue values (ie high numValidCUE). And explore the invasion consiquences across a wide range of cue (and thus vmax) values for both the native and invation population. Compare this to the previously calculated stategic cue values.
 ```{r invade, cache=TRUE, fig.width=12}
 indexSubset <- daply(subset(steady.state, is.finite(numValidCUE)), c('numValidCUE'), function(xx){return(sample(xx$validIndex, 1))})
-indexSubset <- indexSubset[as.character(c(45, 42, 40, 37, 35, 32, 30, 25, 20))]
+indexSubset <- indexSubset[as.character(c(45, 42, 40, 37, 35, 32, 30, 27, 25))]
 print(indexSubset)
 ggplot(subset(steady.state, validIndex %in% indexSubset)) + 
   geom_line(aes(x=cue, y=B, group=validIndex)) + 
@@ -205,9 +205,12 @@ ggplot(subset(steady.state, validIndex %in% indexSubset)) +
   facet_wrap(~validIndex, scales='free')
 
 invaded <- dlply(subset(bestCUE, validIndex %in% indexSubset), c('validIndex'), function(native){
-  #native <- subset(bestCUE, validIndex == 4)
+  #native <- subset(bestCUE, validIndex == 2)#14969)
   #print(native)
-  print(unique(native$validIndex))
+  print(native$validIndex)
+  #validSS <- subset(steady.state, validIndex == native$validIndex, c('B', 'C', 'cue'))
+  #validSS$valid <- with(validSS, B/(B+C) < 0.15 & B/(B+C) > 0.01 & 
+  #                           B+C > 10 & B+C < 500 & B >0 & C > 0)
   cueRange <- range(subset(steady.state, validIndex == native$validIndex & 
                              B/(B+C) < 0.15 & B/(B+C) > 0.01 & 
                              B+C > 10 & B+C < 500 & B >0 & C > 0, select='cue'))

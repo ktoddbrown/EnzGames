@@ -18,13 +18,19 @@ invasion <- function(parm, tradeoff, rel_invader=0.1, timeFlag=c('all', 'last')[
     return(list(ans))
   }
   
-  
-  evolution <- lsoda(y=c(B1=parm$B1.ss, B2=parm$B1.ss*rel_invader, C=parm$C.ss), 
-                     times=timearr, func=dC, parms=parm)
-  
-  temp <- as.data.frame(evolution)
-  temp[abs(temp) < 1e-8] <- 0 #cut off absolute tol
-  temp$time <- timearr
+  #evolution <- lsoda(y=c(B1=parm$B1.ss, B2=parm$B1.ss*rel_invader, C=parm$C.ss), 
+  #                                      times=timearr, func=dC, parms=parm)
+  evolution <- tryCatch(lsoda(y=c(B1=parm$B1.ss, B2=parm$B1.ss*rel_invader, C=parm$C.ss),                   times=timearr, func=dC, parms=parm),
+                        warning=function(w){return(data.frame(time=NA))},
+           error=function(e){return(data.frame(time=NA))})
+  #print(evolution)
+  if(is.data.frame(evolution)){
+    temp <- data.frame(time=NA, B1=NA, B2=NA, C=NA)
+  }else{
+    temp <- as.data.frame(evolution)
+    temp[abs(temp) < 1e-8] <- 0 #cut off absolute tol
+    temp$time <- timearr
+  }
   
   if(identical(timeFlag, 'last')){
     return(data.frame(parm, temp[dim(temp)[1],]))
