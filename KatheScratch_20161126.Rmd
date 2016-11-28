@@ -69,108 +69,131 @@ ggplot(tradeoff.df) + geom_line(aes(x=v, y=k))
 ggplot(tradeoff.df) + geom_line(aes(x=cue, y=k, color=b))
 ```
 
+##Calculate the leaching and turnover rate
+```{r findDecay}
+find_h <- function(C, cue, v, k){
+  return(C*cue*v/(k+C))
+}
 
+find_m <- function(cue, v, h, k, I, B){
+  return((cue*v-h)/(cue*k)*(cue/h*I-B))
+}
+```
 ##Find strategic CUE
 ```{r stratCUE, cache=TRUE}
 parm.ls <- list(b=c(-10, -1, -0.1, 0.1, 1, 10),
                 vmax=c(0.1, 0.5, 1, 5, 10),
-                C=c(10, 50, 100, 200, 300),
-                #kmin_rel = c(0.01, 0.05, 0.1, 0.5, 1), #assume kmin relative to C
-                #kmax_rel = c(1, 5, 10, 50, 100), #assume kmax relative to C
                 cue=seq(0.01, 0.99, length=100)
                 )
 tradeoff.df <- expand.grid(parm.ls)
 
-tradeoff.df$kmin <- 0
-tradeoff.df$k_v_slope <- with(tradeoff.df, (C*kmax_rel-kmin)/vmax)
-
 tradeoff.df$v <- cue_v_tradeoff(b=tradeoff.df$b, vmax=tradeoff.df$vmax, cue=tradeoff.df$cue)
-#tradeoff.df$k <- v_k_tradeoff(kmin=tradeoff.df$kmin, v=tradeoff.df$v, k_v_slope=tradeoff.df$k_v_slope)
-
-#tradeoff.df$stable <- with(tradeoff.df, v*cue*(k+C))
 tradeoff.df$index <- 1:(dim(tradeoff.df)[1])
 
-#ggplot(tradeoff.df) + geom_histogram(aes(x=stable)) + scale_x_log10()
-#ggplot(tradeoff.df) + geom_point(aes(x=cue, y=stable, color=k)) + facet_wrap(kmin_rel+kmax_rel~vmax+b+C)
+strategic_pairs <- ddply(tradeoff.df, c('index'), function(xx, C=1){
+  #let xx be native; tradeoff.df be invation
+  temp <- subset(tradeoff.df, b==xx$b & vmax == xx$vmax)
+  #Since C is a multiplier for the k(v) slope and we are flittering on >0 we can just use C=1
+  q <- with(temp, (v*cue-xx$v*xx$cue)/(xx$v*v*(xx$cue-cue))*C)
+  validFlag <- is.finite(q) & q > 0
+  return(data.frame(index.y=temp[validFlag, 'index'], k_v_slope1=q[validFlag]))
+})
+names(strategic_pairs)[1] <- 'index.x'
+ggplot(strategic_pairs) + geom_histogram(aes(x=k_v_slope1)) + scale_x_log10()
 
-strategic_pairs <- ddply(tradeoff.df, c('index'), function(xx){
-  temp <- subset(tradeoff.df, index != xx$index & 
-                   b==xx$b & vmax==xx$vmax & kmin==xx$kmin & k_v_slope==xx$k_v_slope)
-  ##Calculate tradeoff-slope based on C, then set stable
-  
-  bestMatch <- temp[which.min(abs(xx$stable-temp$stable)),]
-  if(bestMatch$index < xx$index){
+strategic_pairs <- merge(strategic_pairs, tradeoff.df, by.x='index.x', by.y='index')
+strategic_pairs <- merge(strategic_pairs, tradeoff.df, by.x='index.y', by.y='index')
+strategic_pairs$C.ss <- with(strategic_pairs, k_v_slope1*v.x*v.y*(cue.x-cue.y)/(v.y*cue.y-v.x*cue.x))
+
+ggplot(strategic_pairs) + geom_point(aes(x=cue.x, y=cue.y, color=log10(k_v_slope1))) + 
+  facet_wrap(~b.x) + labs(title='Stategic CUE effected by tradeoff slopes b and k-v-slope')
+
+strategic_pairs$cue.diff <- abs(strategic_pairs$cue.x-strategic_pairs$cue.y)
+
+intersect_1to1 <- strategic_pairs[strategic_pairs$cue.diff < 0.01,]
+ggplot(intersect_1to1) + geom_jitter(aes(x=b.x, y=k_v_slope1, color=log10(vmax.x))) +  
+  scale_y_log10() + scale_x_log10()
+
+ggplot(intersect_1to1) + geom_line(aes(y=(cue.x+cue.y)/2, x=k_v_slope1, color=as.factor(b.x), linetype=as.factor(vmax.x), group=as.factor(paste('v=', vmax.x, 'b=', b.x)))) + scale_x_log10() + labs(title='Strategic CUE surfaces', x='Slope for k vs v tradeoff at C=1', y='Strategic CUE')
+
+#ggplot(intersect_1to1) + geom_point(aes(x=cue.x, y=cue.y)) + geom_abline(slope=1, intercept=0)
+
+#plot.df <- melt(with(intersect_1to1, data.frame(id.x=index.x, id.y=index.y, b=b.x, vmax=vmax.x, q=k_v_slope1, cue=(cue.x+cue.y)/2)), id.vars=c('id.x', 'id.y', 'cue'))
+
+#ggplot(plot.df) + geom_point(aes(x=value, y=cue)) + facet_wrap(~variable, scale='free') + scale_x_log10()
+```
+Strategic CUE raises with decreasing b (tradeoff parameter for uptake vs cue), increases with increasing q (tradeoff parameter for half-saturation vs uptake), and also increases with increasing vmax (maximum uptake rate). Different C totals directly scale q (tradeoff parameter for the half-satuartion vs uptake kinetic) at stable CUE pairs.
+
+#Pull 
+```{r}
+##Input between 0.1 to 10 mg/g*day
+##SOC (B+C) between 10 to 500 mg/g
+##B:SOC between 0.001 to 0.15
+
+##for inputs to match outputs at (10, 500)/tau_exit=(0.1, 10)
+##tau_exit = (1, 5000) which now constrains 1/m and 1/h
+##k should be order of mag around (10, 500)
+
+#h: death rate
+#k: half-sat of Monod growth
+#I: input rate
+#m: leach rate of substrate pool
+
+parm.df <- list(I=c(0.1, 1, 10), #input
+                C=c(10, 50, 100, 500), #SOC
+                B_rel=c(0.1, 1, 5, 15)/100) #biomass percent of total SOC = B+C
+parm.df$B_rel <- parm.df$B_rel/(1-parm.df$B_rel)
+parm.df <- expand.grid(parm.df)
+
+temp <- intersect_1to1[,c('k_v_slope1', 'b.x', 'vmax.x', 'cue.x', 'cue.y')]
+names(temp) <- c('k_v_slope1', 'b', 'vmax', 'cue.n', 'cue.i')
+
+parm.df <- ddply(parm.df, c('I', 'C', 'B_rel'), function(xx){
+  return(data.frame(xx, temp))
+})
+
+parm.df$B <- parm.df$C*parm.df$B_rel
+parm.df$v <- cue_v_tradeoff(b=parm.df$b, vmax=parm.df$vmax, cue=parm.df$cue.n)
+parm.df$k <- v_k_tradeoff(kmin=0, k_v_slope=parm.df$k_v_slope1*parm.df$C, v=parm.df$v)
+parm.df$h <- find_h(C=parm.df$C, cue=parm.df$cue.n, v=parm.df$v, k=parm.df$k)
+parm.df$m <- find_m(cue=parm.df$cue.n, v=parm.df$v, h=parm.df$h, I=parm.df$I, 
+                    B=parm.df$B, k=parm.df$k)
+parm.df <- parm.df[parm.df$m > 0, ]
+baseParmName <- c('I', 'k_v_slope1', 'b', 'vmax', 'm', 'h', 'C')
+
+temp <- ddply(parm.df, baseParmName, function(xx){
+  cue <- seq(0, 1, length=100)
+  cue <- cue[which.max(cue*cue_v_tradeoff(b=xx$b, vmax=xx$vmax, cue))]
+  v <- cue_v_tradeoff(b=xx$b, vmax=xx$vmax, cue)
+  k <- v_k_tradeoff(kmin=0, k_v_slope=xx$k_v_slope1*xx$C, v=v)
+  ans <- data.frame(cue.strategic=(xx$cue.n+xx$cue.i)/2,
+                    B.n.strategic=xx$B,
+                    C.strategic=xx$C,
+                    cue.optimal=cue,
+                    B.optimal=cue/xx$h*xx$I - cue*xx$m*k/(cue*v-xx$h),
+                    C.optimal=xx$h*k/(cue*v-xx$h))
+  if(ans$B.optimal*ans$C.optimal < 0 |
+     ans$C.optimal+ans$B.optimal > 600 |
+     ans$C.strategic + ans$B.n.strategic > 600){
     return(data.frame())
+  }else{
+    return(ans)
   }
-  return(data.frame(matchIndex = bestMatch$index, 
-                    rel_drift=abs(xx$stable-bestMatch$stable)/xx$stable))
 })
 
-ggplot(strategic_pairs) + geom_histogram(aes(x=rel_drift)) + scale_x_log10()
 
-temp <- merge(strategic_pairs, tradeoff.df)
-temp$index.x <- temp$index
-temp$index <- temp$matchIndex
-temp <- merge(temp, tradeoff.df, by=c('index', 'b', 'kmin_rel', 'kmax_rel', 'vmax', 'C'))
-temp$C.ss <- with(temp, (v.x*cue.x*k.y-v.y*cue.y*k.x)/(v.y*cue.y-v.x*cue.x))
-ggplot(subset(temp, abs(C.ss-C)/C < 0.1)) + geom_point(aes(x=cue.x, y=cue.y, 
-                              color=as.factor(b), shape=as.factor(C))) +
-  geom_point(aes(y=cue.x, x=cue.y, 
-                              color=as.factor(b), shape=as.factor(C))) +
-  geom_abline(slope=1, intercept=0) + facet_wrap(kmax_rel~kmin_rel)
-
-ggplot(temp) + geom_point(aes(x=stable.x, y=stable.y)) + geom_abline(slope=1, intercept=0)
-ggplot(temp) + geom_point(aes(x=C, y=(v.x*cue.x*k.y-v.y*cue.y*k.x)/(v.y*cue.y-v.x*cue.x))) +
-  geom_abline(slope=1, intercept=0)
-
-summary(temp[abs(temp$C - with(temp, (v.x*cue.x*k.y-v.y*cue.y*k.x)/(v.y*cue.y-v.x*cue.x)))/temp$C < 0.1,])
-
+plot.df <- melt(temp, measure.vars=baseParmName)
+ggplot(plot.df) + geom_point(aes(x=cue.strategic, y=value)) + facet_wrap(~variable, scale='free')
+ggplot(plot.df) + geom_point(aes(x=cue.optimal, y=value)) + facet_wrap(~variable, scale='free')
+ggplot(plot.df) + geom_point(aes(x=B.n.strategic+C.strategic, y=B.optimal+C.optimal)) + geom_abline(slope=1, intercept=0)
+ggplot(plot.df) + geom_point(aes(x=cue.strategic, y=cue.optimal))
 ```
-
-```{r old}
-tradeoff.df <- adply(.data=c(-10, -1, -0.1, 0.1,1,10), .margins=c(1), .id=c('id'),
-                     .fun=function(b){
-  ans <- data.frame(b=b, cue=seq(0, 1, length=1000))
-  ans$v <- cue_v_tradeoff(b=b, vmax=2, cue=ans$cue)
-  return(ans)
-})
-strategic_cue <- ddply(tradeoff.df, c('b'), summarize, cue=cue[which.max(cue*v)])
-
-co_cue <- ddply(tradeoff.df, c('b'), function(xx){
-  temp_cue <- strategic_cue[strategic_cue$b == xx$b[1], 'cue']
-  low <- subset(xx, cue < temp_cue)
-  high <- subset(xx, cue > temp_cue)
-  return(ddply(low, c('cue'), function(yy){
-    ans <- data.frame(yy, 
-                      cue.pair=high[which.min(abs(high$cue*high$v-yy$cue*yy$v)),'cue'],
-                      v.pair=high[which.min(abs(high$cue*high$v-yy$cue*yy$v)),'v'])
-  }))
-})
-
-temp <- ddply(co_cue, c('b'), function(xx){
-  return(xx[sample.int(dim(xx)[1], size=1),])
-})
- ggplot(tradeoff.df) +geom_point(aes(x=cue, y=cue*v, color=as.factor(b))) + 
-   #geom_vline(data=strategic_cue, aes(xintercept=cue, color=as.factor(b))) +
-   geom_vline(data=temp, aes(xintercept=cue, color=as.factor(b)), linetype='dotted') +
-   geom_vline(data=temp, aes(xintercept=cue.pair, color=as.factor(b)), linetype='dotted') +
-   geom_hline(data=temp, aes(yintercept=cue*v, color=as.factor(b)), linetype='dotted') +
-   labs(title='CUE with same CUE*v values can co-exist')
-
-ggplot(co_cue) + geom_line(aes(x=cue, y=cue.pair, color=as.factor(b))) + 
-  geom_line(aes(x=cue.pair, y=cue, color=as.factor(b))) +
-  geom_point(data=strategic_cue, aes(x=cue, y=cue, color=as.factor(b))) +
-  geom_abline(slope=1, intercept=0) + labs(title='Co-existance lines for two populations',
-                                           y='Population 1 [carbon use effiency]',
-                                           x='Population 2 [carbon use effiency]')
-
-```
-
+#Everything below here is a work in progress and needs to be modified
 #Pull target parameters
 First let's try to calculate reasonable loss and uptake rates for the input (0.1 to 10 mg/g/day), soil carbon stock targets (SOC between 10 and 500 mg/g) and biomass (1 to 15 %) for one population.
 
 
-```{r pullTargets}
+```{r pullTargets, eval=FALSE}
 
 ##Input between 0.1 to 10 mg/g*day
 ##SOC (B+C) between 10 to 500 mg/g
@@ -206,7 +229,7 @@ steady.state$v <- with(steady.state, cue_v_tradeoff(b, vmax, cue)) #calc v from 
 steady.state$k <- with(steady.state, C/h*(cue*v-h)) ##set from target parm analysis
 
 ##recalculate strategic CUE from new parmaeter set
-strategic_cue <- ddply(steady.state, c('b'), summarize, cue=cue[which.max(cue*v)])
+optimial_cue <- ddply(steady.state, c('b'), summarize, cue=cue[which.max(cue*v)])
 
 ##get bounds for target
 quantPar <- apply(subset(steady.state, k>0), 2, quantile, na.rm=TRUE)
@@ -214,26 +237,30 @@ kable(quantPar)
 ```
 
 Then use those targets to generate parameters and solve for the 'best' cue numerically.
-```{r bestCUE, cache=TRUE}
+```{r bestCUE, eval=FALSE, cache=TRUE}
 ncuts <- 50
 parm.df <- list(I=c(0.1*(1:9), 1:10), 
                 cue=seq(0.01, 0.99, length=ncuts),
                 m = exp(seq(log(quantPar['25%', 'm']), log(quantPar['75%', 'm']), length=5)),
                 h = exp(seq(log(quantPar['25%', 'h']), log(quantPar['75%', 'h']), length=10)),
-                k = exp(seq(log(quantPar['25%', 'k']), log(quantPar['75%', 'k']), length=5)),
+                k_v_slope = exp(seq(quantile(log(strategic_pairs$k_v_slope1), 0.25), 
+                            quantile(log(strategic_pairs$k_v_slope1), 0.75), length=5)),
                 b=c(-10, -1, -0.1, 0.1, 1, 10),
                 vmax=exp(seq(log(quantPar['25%', 'vmax']), log(quantPar['75%', 'vmax']), length=5)))
           
 steady.state <- expand.grid(parm.df)
 steady.state$v <- with(steady.state, cue_v_tradeoff(b, vmax, cue))
+steady.state$k <- with(steady.state, k_v_slope*v)
 steady.state$C <- with(steady.state, h*k/(cue*v-h))
 steady.state$B <- with(steady.state, cue/h*(I-m*C))
 
-strategic_cue <- ddply(steady.state, c('b'), summarize, cue=cue[which.max(cue*v)])
+realisticSOC <- subset(steady.state, B/(B+C) < 0.15 & 
+                         B/(B+C) > 0.01 & 
+                         B+C > 10 & 
+                         B+C < 500 & 
+                         B >0 & C > 0)
 
-realisticSOC <- subset(steady.state, B/(B+C) < 0.15 & B/(B+C) > 0.01 & B+C > 10 & B+C < 500 & B >0 & C > 0)
-uniquePars <- unique(subset(realisticSOC, select=c('I', 'm', 'h', 'k', 'b', 'vmax')))
-cueCount <- ddply(realisticSOC, c('I', 'm', 'h', 'k', 'b', 'vmax'),
+cueCount <- ddply(realisticSOC, c('I', 'm', 'h', 'k_v_slope', 'b', 'vmax'),
                   function(xx){
                     ans <- data.frame(validCUE.min = min(xx$cue),
                                       validCUE.max = max(xx$cue),
@@ -262,7 +289,7 @@ kable(summary(bestCUE))
 
 #Numerical validate strategic CUE with 100 yr invasion model
 Pick several parameter sets which generated 'valid' soil carbon pools for a broad range of cue values (ie high numValidCUE). And explore the invasion consiquences across a wide range of cue (and thus vmax) values for both the native and invation population. Compare this to the previously calculated stategic cue values.
-```{r invade, cache=TRUE, fig.width=12}
+```{r invade, eval=FALSE, cache=TRUE, fig.width=12}
 indexSubset <- daply(subset(steady.state, is.finite(numValidCUE)), c('numValidCUE'), function(xx){return(sample(xx$validIndex, 1))})
 indexSubset <- indexSubset[as.character(c(45, 42, 40, 37, 35, 32, 30, 27, 25))]
 print(indexSubset)
@@ -317,7 +344,7 @@ plot_grid(plotlist=invaded, ncol=3)
 Figure capture: The red line is the optimal CUE without competition. The orange line is the stategic CUE with competition. Blue dots represent the relative percentatve of the native population (B1) at the end of 100 years.
 
 #Examin effects of input on optimal CUE
-```{r Ieffects}
+```{r Ieffects, eval=FALSE}
 I_cue_index <- unique(bestCUE[, c('b', 'm', 'h', 'k', 'vmax')])
 I_cue_index$I_cue_index <- 1:(dim(I_cue_index)[1])
 temp <- merge(subset(I_cue_index,I_cue_index %in% sample(length(I_cue_index), 50)), bestCUE)
@@ -334,7 +361,7 @@ ggplot(temp) +
 ```
 
 #Examin effects of b (trade-off slope) on optimal CUE
-```{r bEffects}
+```{r bEffects, eval=FALSE}
 b_cue_index <- unique(bestCUE[, c('I', 'm', 'h', 'k', 'vmax')])
 b_cue_index$b_cue_index <- 1:(dim(b_cue_index)[1])
 temp <- merge(subset(b_cue_index,b_cue_index %in% sample(length(b_cue_index), 50)), 
