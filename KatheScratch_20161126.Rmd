@@ -13,16 +13,10 @@ library(knitr)
 include_graphics('notes/2016September_meeting.jpg')
 ```
 
-#Target parameters to hit carbon targets
-```{r parmPic, out.width='30%', echo=FALSE}
+#Competition model co-existance derivation with k and v tradeoff
+```{r coExPic, out.width='60%', echo=FALSE}
 library(knitr)
-include_graphics('notes/TradeOff_targetParm.jpg')
-```
-
-#Competition model with co-existance derivation
-```{r coExPic, out.width='30%', echo=FALSE}
-library(knitr)
-#include_graphics('notes/TradeOff_stableSurface.jpg')
+include_graphics('notes/TradeOff_compitition_k_v_against_cue.jpg')
 ```
 
 #Analysis code
@@ -124,7 +118,7 @@ ggplot(intersect_1to1) + geom_line(aes(y=(cue.x+cue.y)/2, x=k_v_slope1, color=as
 ```
 Strategic CUE raises with decreasing b (tradeoff parameter for uptake vs cue), increases with increasing q (tradeoff parameter for half-saturation vs uptake), and also increases with increasing vmax (maximum uptake rate). Different C totals directly scale q (tradeoff parameter for the half-satuartion vs uptake kinetic) at stable CUE pairs.
 
-#Pull 
+#Compare strategic vs optmial solutions
 ```{r}
 ##Input between 0.1 to 10 mg/g*day
 ##SOC (B+C) between 10 to 500 mg/g
@@ -162,16 +156,20 @@ parm.df <- parm.df[parm.df$m > 0, ]
 baseParmName <- c('I', 'k_v_slope1', 'b', 'vmax', 'm', 'h', 'C')
 
 temp <- ddply(parm.df, baseParmName, function(xx){
+  #Find optimal cue for issolated population
   cue <- seq(0, 1, length=100)
-  cue <- cue[which.max(cue*cue_v_tradeoff(b=xx$b, vmax=xx$vmax, cue))]
   v <- cue_v_tradeoff(b=xx$b, vmax=xx$vmax, cue)
   k <- v_k_tradeoff(kmin=0, k_v_slope=xx$k_v_slope1*xx$C, v=v)
+  B <- cue*xx$h*k/(cue*v-xx$h)
+  C <- xx$h*k/(cue*v-xx$h)
+  bestB <- which.max(B)
+  
   ans <- data.frame(cue.strategic=(xx$cue.n+xx$cue.i)/2,
                     B.n.strategic=xx$B,
                     C.strategic=xx$C,
-                    cue.optimal=cue,
-                    B.optimal=cue/xx$h*xx$I - cue*xx$m*k/(cue*v-xx$h),
-                    C.optimal=xx$h*k/(cue*v-xx$h))
+                    cue.optimal=cue[bestB],
+                    B.optimal=B[bestB],
+                    C.optimal=C[bestB])
   if(ans$B.optimal*ans$C.optimal < 0 |
      ans$C.optimal+ans$B.optimal > 600 |
      ans$C.strategic + ans$B.n.strategic > 600){
@@ -186,9 +184,12 @@ plot.df <- melt(temp, measure.vars=baseParmName)
 ggplot(plot.df) + geom_point(aes(x=cue.strategic, y=value)) + facet_wrap(~variable, scale='free')
 ggplot(plot.df) + geom_point(aes(x=cue.optimal, y=value)) + facet_wrap(~variable, scale='free')
 ggplot(plot.df) + geom_point(aes(x=B.n.strategic+C.strategic, y=B.optimal+C.optimal)) + geom_abline(slope=1, intercept=0)
-ggplot(plot.df) + geom_point(aes(x=cue.strategic, y=cue.optimal))
+ggplot(plot.df) + geom_point(aes(x=cue.strategic, y=cue.optimal)) + geom_abline(slope=1, intercept=0)
 ```
+
+
 #Everything below here is a work in progress and needs to be modified
+
 #Pull target parameters
 First let's try to calculate reasonable loss and uptake rates for the input (0.1 to 10 mg/g/day), soil carbon stock targets (SOC between 10 and 500 mg/g) and biomass (1 to 15 %) for one population.
 
