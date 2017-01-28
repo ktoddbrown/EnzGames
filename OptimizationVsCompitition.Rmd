@@ -75,7 +75,7 @@ tradeoff.df <- adply(.data=c(-0.1*1:9, -1*1:10, 0.1*1:9, 1:10), .margins=c(1), .
   return(ans)
 })
 
-ggplot(tradeoff.df) + geom_line(aes(x=cue, y=v, color=b))
+ggplot(tradeoff.df) + geom_line(aes(x=cue, y=v, group=b, color=b))
 
 v_k_tradeoff <- function(kmin, k_v_slope, v){
   return(kmin+k_v_slope*v)
@@ -137,7 +137,7 @@ optParm.df$OnTarget <- with(optParm.df, B+C > 10 & B+C < 500 & B/(B+C)> 0.001 & 
 #ggpairs(subset(optParm.df[,c(names(parm.ls), 'OnTarget')]) 
 
 ggplot(subset(optParm.df, OnTarget)) + geom_histogram(aes(x=cue))
-ggplot(subset(optParm.df, OnTarget)) + geom_jitter(aes(x=I, y=cue)) + scale_x_log10()
+ggplot(subset(optParm.df, OnTarget)) + geom_violin(aes(x=as.factor(I), y=cue)) 
 #ggplot(subset(optParm.df, OnTarget)) + geom_jitter(aes(x=I, y=B+C)) + scale_x_log10()
 
 ```
@@ -204,22 +204,75 @@ ggplot(diff.df) + geom_violin(aes(x=as.factor(value), y=(cue_opt-cue_strat)/cue_
 ```
 
 We are particullary interested in differences in inputs
-```{r exploreInput}
-inputIndex <- unique(stratParm.df[, setdiff(names(parm.ls), 'I')])
-inputIndex$nonI.index <- 1:nrow(inputIndex)
+```{r exploreInput, cache=TRUE}
+validParms <- subset(stratParm.df, validPools_strat & validPools_opt)
+I.arr <- seq(0.1, 10, by=0.3)
+Igrad <- ddply(unique(validParms[,c("b", "vmax", "kmin", "k_v_slope", "h", "m")]), 
+               c("b", "vmax", "kmin", "k_v_slope", "h", "m"), function(xx){
+                 ans1 <- data.frame()
+                 for(I in I.arr){
+                   opt_results <- optimum_cue(xx$b, xx$vmax, xx$kmin, 
+                                              xx$k_v_slope, xx$h, xx$m, I)
+                   names(opt_results) <- paste(names(opt_results), '_opt', sep='')
+                   strat_results <- strategic_cueI(xx$b, xx$vmax, xx$kmin, 
+                                                   xx$k_v_slope, xx$m, xx$h, I)
+                   ans1 <- rbind.fill(ans1, 
+                                      as.data.frame(c(xx[c("b", "vmax", "kmin", 
+                                                           "k_v_slope", "h", "m")], 
+                                                      I=I, opt_results, strat_results)))
+                   
+                 }
+                 #cat('dim ans1:', dim(ans1), '\n')
+                 ans2 <- data.frame()
+                 for(I in I.arr*rnorm(length(I.arr), mean=1, sd=0.05)){
+                   opt_results <- optimum_cue(xx$b, xx$vmax, xx$kmin, xx$k_v_slope, 
+                                              xx$h, xx$m, I)
+                   names(opt_results) <- paste(names(opt_results), '_opt', sep='')
+                   strat_results <- strategic_cueI(xx$b, xx$vmax, xx$kmin, xx$k_v_slope, 
+                                                   xx$m, xx$h, I)
+                   ans2 <- rbind.fill(ans2, 
+                                      as.data.frame(c(xx[c("b", "vmax", "kmin", 
+                                                           "k_v_slope", "h", "m")], 
+                                                      I=I, opt_results, strat_results)))
+                 }
+                 #cat('dim ans2:', dim(ans1), '\n')
+                 if(nrow(ans1) != nrow(ans2)){
+                   print(xx[c("b", "vmax", "kmin", "k_v_slope", "h", "m"),])
+                   return(NULL)
+                 }
+                 
+                 dCUEdI <- data.frame(dcue_opt = (ans1$cue_opt - ans2$cue_opt),
+                                      dcue_strat = (ans1$cue_strat-ans2$cue_strat),
+                                      dB_opt = ans1$B_opt-ans2$B_opt,
+                                      dC_opt = ans1$C_opt-ans2$C_opt,
+                                      dB_strat = ans1$B_strat - ans2$B_strat,
+                                      dC_strat = ans1$C_strat - ans2$C_strat,
+                                      dI = (ans1$I-ans2$I))
+                 #cat('dim dCUEdI:', dim(dCUEdI), '\n')
+                 return(cbind(ans1, dCUEdI))
+               })
 
-inputIndex <- merge(stratParm.df, inputIndex)
-range <- ddply(subset(inputIndex, validPools_opt & validPools_strat), c('nonI.index'), summarize,
-                    relShift.cue=range((cue_opt-cue_strat)/cue_opt, na.rm=TRUE))
+Igrad$validParam <- with(Igrad, B_opt+C_opt > 10 & 
+                           B_opt+C_opt < 500 & 
+                           B_opt/(B_opt+C_opt)> 0.001 & 
+                           B_opt/(B_opt+C_opt) < 0.15 &
+                           B_strat+C_strat > 10 & 
+                           B_strat+C_strat < 500 & 
+                           B_strat/(B_strat+C_strat)> 0.001 & 
+                           B_strat/(B_strat+C_strat) < 0.15)
+```
 
-inputIndex <- merge(inputIndex, range)
-inputIndex <- subset(inputIndex, validPools_opt & validPools_strat)
-ggplot(inputIndex) + geom_line(aes(x=as.factor(I), y=(cue_opt-cue_strat)/cue_opt, group=nonI.index))
+```{r plotIgrad}
+plot.df <- melt(Igrad, measure.vars=names(Igrad)[grepl('_(opt)|(strat)', names(Igrad))])
+temp <- as.data.frame(matrix(unlist(strsplit(as.character(plot.df$variable), '_|\\.')), ncol=2, byrow=TRUE))
+names(temp) <- c('variable', 'type')
+plot.df$variable <- NULL
+plot.df <- cbind(plot.df, temp)
+plot.df$isGrad <- grepl('d', as.character(plot.df$variable))
 
-ggplot(inputIndex) + geom_line(aes(x=as.factor(I), y=(cue_opt-cue_strat)/cue_opt, group=nonI.index, color=m)) + facet_wrap(~b)
+ggplot(subset(plot.df, validParam & isGrad)) + geom_hex(aes(x=I, y=value/dI)) + facet_grid(variable~type, scales='free') + scale_y_log10()
 
-plot.df <- melt(inputIndex, measure.vars=setdiff(names(parm.ls), 'I'))
-ggplot(plot.df) + geom_violin(aes(x=as.factor(value), y=relShift.cue)) + facet_wrap(~variable, scales='free')
+ggplot(subset(plot.df, validParam & !isGrad)) + geom_hex(aes(x=I, y=value)) + facet_grid(variable~type, scales='free')
 ```
 
 #Numerical validation code
