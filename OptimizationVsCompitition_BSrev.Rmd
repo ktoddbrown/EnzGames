@@ -1,0 +1,545 @@
+---
+title: "Notes for cue vs uptake vs half-saturation trade-off invasion model (JAM-BSrev)"
+author: "K Todd-Brown (ktoddbrown@gmail.com)"
+date: '`r Sys.Date()`'
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+---
+
+TODO: Convert color scheme to wesanderson colorpack
+
+##Set up
+```{r setup, message=FALSE}
+library(assertthat)
+library(reshape2)
+library(ggplot2)
+library(GGally)
+library(plyr)
+library(rootSolve)
+library(deSolve)
+library(knitr)
+library(pander)
+library(cowplot)
+
+#sourceFiles <- 'R/invasion.R'
+#l_ply(sourceFiles, source)
+
+set.seed(100) #reproducible random selection
+
+sessionInfo()
+```
+
+#Basic model description
+The goal of this model to simulation biologically mediated decomposition. There are two main pools, Substrate ($C$) and Biomass ($B$). Carbon is added to the substrate pool via inputs ($I$), leached from both pools at a rate proportional to the carbon in the pool ($h$ fraction of the biomass pool $B$, and $m$ fraction of the substate pool $C$), and transfer between the substrate $C$ pool and biomass $B$ pool via a reverse Monod uptake with a maximum rate $v$, half-saturation constant $k$, and carbon use effiency $\epsilon$.
+Reverse Monod uptake was selected to ensure that both substrate pools were sensitive to changes in inputs.
+
+$\frac{dB}{dt}=\frac{\epsilon vBC}{k+B}-hB$
+
+$\frac{dC}{dt}=I-mC-\frac{vBC}{k+B}$
+
+At steady state ($\frac{dB}{dt}=\frac{dC}{dt}=0$) this implies that:
+
+$B=\frac{Iv\epsilon-mhk}{hv+mh}$
+
+$C=\frac{h}{\epsilon v}(k+B)$
+
+
+If we further assume that there is a trade off between both 1) uptake $v$ and carbon use effiency ($\epsilon$) such that $v=\frac{e^{b\epsilon}-e^b}{1-e^b}$ and the half saturation constant ($k$) such that $k=a v +k_{min} = \frac{a}{1-e^b}(e^{b\epsilon}-e^b)$. Defined as:
+
+
+This leads to the following steady state calculations for one biomass pool:
+
+```{r ssOneB}
+cue_v_tradeoff <- function(b, vmax, cue){
+  return(vmax*(exp(b*cue)-exp(b))/(exp(0)-exp(b)))
+}
+
+v_k_tradeoff <- function(kmin, a, v){
+  return(kmin+a*v)
+}
+
+steadyState <- function(b, vmax, kmin, a, h, m, I, cue){
+  v <- cue_v_tradeoff(b=b, vmax=vmax, cue)
+  k <- v_k_tradeoff(kmin=kmin, a=a, v=v)
+
+  B <- (I*v*cue-m*h*k)/(h*v+m*h)  
+  C <- h/(cue*v) * (k+B)
+
+  return(list(B=B, C=C))
+}
+```
+
+##Visualize trade-off between cue vs uptake and k
+```{r tradeoff_cue_v}
+
+tradeoff.df <- adply(.data=c(-0.1*1:9, -1*1:10, 0.1*1:9, 1:10), .margins=c(1), .id=c('id'), .fun=function(b){
+  ans <- data.frame(b=b, cue=seq(0, 1, length=1000))
+  ans$v <- cue_v_tradeoff(b=b, vmax=2, cue=ans$cue)
+  return(ans)
+})
+
+ggplot(tradeoff.df) + geom_line(aes(x=cue, y=v, group=b, color=b))
+
+tradeoff.df$k <- v_k_tradeoff(kmin=0, a=100/2, tradeoff.df$v) #slope is max SOC over vmax range
+```
+
+##Steady state sensitivity to inputs
+
+Recall that at steady state:
+
+$B=\frac{Iv\epsilon-mhk}{hv+mh}$
+
+$C=\frac{h}{\epsilon v}(k+B)$
+
+This imples that:
+$\frac{dB}{dI}=\frac{v\epsilon}{hv+mh}$
+$\frac{dC}{dI}=\frac{1}{v+m}$
+
+#Optimum carbon use effiency
+We want the optimum carbon use effiency where biomass is maximum as steady state but that is not possible to solve analytically (you end up with $y=xe^x$, solve for x).
+We instead bruite force a solution, iterating $\epsilon$ over $[0,1]$ in incraments of $0.01$
+
+```{r findOptCUE}
+optimum_cue <- function(b, vmax, kmin, a, h, m, I){
+  cue <- seq(0, 1, length=100)
+  ans <- steadyState(b, vmax, kmin, a, h, m, I, cue)
+  ans$B[ans$B <= 0 | ans$C <= 0] <- -Inf
+  ans$C[ans$B <= 0 | ans$C <= 0] <- -Inf
+  
+  best <- which.max(ans$B)
+  return(list(B_opt=ans$B[best], C_opt=ans$C[best], cue_opt=cue[best]))
+}
+```
+
+##Generate reasonable parameter sets without compitition
+Given that we have input targets between 0.1 and 10 mg-C per g-soil per day, total carbon pools of between 10 to 500 mg-C per g-soil, and a biomass to total carbon ratio of between 0.1 and 15 percent. Let's generate some reasonable parameters to draw on.
+
+```{r resonable, cache=TRUE}
+checkPools <- function(B, C){
+  return( B > 0 & C > 0 &
+    B+C > 10 & B+C < 500 & B/(B+C)> 0.001 & B/(B+C) < 0.15)
+}
+
+parm.ls <- list(b=c(-10, -1, -0.1, 0.1, 1, 10),
+                vmax=c(0.1, 0.5, 1, 5, 10, 100),
+                kmin=c(0, 1, 10, 100, 1000),
+                a=c(1/10, 1, 10, 100, 1000),
+                h=c(1e-4, 1e-3, 1e-2, 0.1, 1, 10),
+                m=c(1e-4, 1e-3, 1e-2, 0.1, 1, 10),
+                I=c(0.1, 1, 10))
+                
+parm.df <- expand.grid(parm.ls)
+
+parm.df <- ddply(parm.df, names(parm.df), function(xx){
+  ans <- as.data.frame(optimum_cue(b=xx$b, vmax=xx$vmax, kmin=xx$kmin, a=xx$a, 
+              h=xx$h, m=xx$m, I=xx$I))
+  return(ans)
+})
+
+parm.df$validPools_opt <- checkPools(B=parm.df$B_opt, C=parm.df$C_opt)
+
+
+ggplot(subset(parm.df, validPools_opt)) + geom_histogram(aes(x=cue_opt))
+ggplot(subset(parm.df, validPools_opt)) + geom_violin(aes(x=as.factor(I), y=cue_opt)) 
+
+```
+
+#Competition model co-existance
+Consider the senerio where the native popuation is invated by a second competiting population that has a different carbon use effiency but is otherwise equivalent.
+Let the strategic carbon use effiency be where the native popuation is never invadable no matter what carbon use effiency value the invader has.
+
+$\frac{dB_i}{dt}=\frac{\epsilon_{i}v_iB_iC}{k_i+B_i}-hB_i$
+$\frac{dB_n}{dt}=\frac{\epsilon_{n}v_nB_nC}{k_n+B_n}-hB_n$
+$\frac{dC}{dt}=I-mC-\frac{v_nB_nC}{k_n+B_n} - \frac{v_iB_iC}{k_i+B_i}$
+where $n$ and $i$ stand for the native and invading populations respectively.
+
+Assume steady state again
+$C=\frac{I}{m} - \frac{h}{m}(\frac{B_i}{\epsilon_i} + \frac{B_n}{\epsilon_n})$
+
+$B_i=\frac{\epsilon_i v_i}{h} C - k_i$
+
+Implies that
+$(\frac{B_i}{\epsilon_i} + \frac{B_n}{\epsilon_n}) = \frac{v_i}{h} C - \frac{k_i}{\epsilon_i} + \frac{v_n}{h} C - \frac{k_n}{\epsilon_n}$
+$(\frac{B_i}{\epsilon_i} + \frac{B_n}{\epsilon_n}) = C \frac{v_n+v_i}{h} - (\frac{k_i}{\epsilon_i} + \frac{k_n}{\epsilon_n})$
+
+Implying that
+$mC=I- h(C \frac{v_n+v_i}{h} - (\frac{k_i}{\epsilon_i} + \frac{k_n}{\epsilon_n}))$
+$C(m + v_n+v_i)= I + h(\frac{k_i}{\epsilon_i} + \frac{k_n}{\epsilon_n})$
+$C = [I + h(\frac{k_i}{\epsilon_i} + \frac{k_n}{\epsilon_n})](m + v_n+v_i)^{-1}$
+
+This requires a new steady state equation
+```{r, competeSSFun}
+steadyState_compete <- function(b, vmax, kmin, a, h, m, I, cue_i, cue_n){
+  v_i <- cue_v_tradeoff(b=b, vmax=vmax, cue_i)
+  k_i <- v_k_tradeoff(kmin=kmin, a=a, v=v_i)
+  
+  v_n <- cue_v_tradeoff(b=b, vmax=vmax, cue_n)
+  k_n <- v_k_tradeoff(kmin=kmin, a=a, v=v_n)
+  
+  C <- (I + h * (k_i/cue_i + k_n/cue_n))/(m + v_n + v_i)
+  B_i <- C * cue_i * v_i / h - k_i
+  B_n <- C * cue_n * v_n / h - k_n
+  
+  return(list(C=C, B_i=B_i, B_n=B_n))
+}
+
+```
+
+##Strategic CUE
+If both CUE are the same then the populations converge to the same biomass at steady state (but are not the same as a single biomass pool because $\frac{1}{k+B_i}+\frac{1}{k+B_n} \neq \frac{1}{k+B_i+B_n}$).
+We are looking for the CUE value where, if the invasion cue is only slightly different from the native CUE we minimize the difference between the two biomass pools.
+
+```{r stratCUEFun}
+strategic_cue <- function(b, vmax, kmin, a, m, h, I){
+  cue <- seq(0, 1, length=100)
+  v <- cue_v_tradeoff(b=b, vmax=vmax, cue)
+  k <- v_k_tradeoff(kmin=kmin, a=a, v=v)
+  
+  ans <- steadyState_compete(b, vmax, kmin, a, h, m, I, cue_n=cue, cue_i=cue-0.005)
+  
+  measure <- abs(ans$B_n-ans$B_i)
+  measure[ans$B_n <= 0 | ans$C <= 0] <- Inf
+  flag <- which.min(measure)
+  
+  return(list(cue_strat=cue[flag], C_strat=ans$C[flag], B_strat=ans$B_n[flag]))
+}
+```
+
+##Tillman
+Tillman's R* maximaizes the growth rate. The logic goes something like this. In the strategic solution there exists some $\epsilon_{n}$ such that for all $\epsilon_{i}$, $B_i=0$ and $B_n > 0$.
+This is true when the only valid invasion parameterization is equal to the nature population (ie $\epsilon_{n}=\epsilon_{i}$) and is the only solution for $\frac{h}{C}=\frac{\epsilon_n v_n}{k_n+B_n}$, that is CUE is selected to maximize microbial uptake.
+```{r tillmanCUEFun}
+tillman_cue <- function(b, vmax, kmin, a, m, h, I){
+  cue <- seq(0, 1, length=100)
+  v <- cue_v_tradeoff(b=b, vmax=vmax, cue)
+  k <- v_k_tradeoff(kmin=kmin, a=a, v=v)
+  
+  ans <- steadyState_compete(b, vmax, kmin, a, h, m, I, cue, cue)
+  
+  measure <- cue*v/(k+ans$B_n)
+  measure[ans$B_n <= 0 | ans$C <= 0] <- -Inf
+  flag <- which.max(measure)
+  
+  return(list(cue_til=cue[flag], C_til=ans$C[flag], B_til=ans$B_n[flag]))
+}
+
+```
+
+```{r findTillman, cache=TRUE}
+parm.df <- ddply(parm.df, names(parm.df), function(xx){
+  return(as.data.frame(tillman_cue(b=xx$b, vmax=xx$vmax, kmin=xx$kmin, 
+                        a=xx$a, m=xx$m, h=xx$h, I=xx$I)))
+})
+
+parm.df$validPools_til <- with(parm.df, checkPools(B=parm.df$B_til, C=parm.df$C_til))
+```
+
+
+```{r findStrategic, cache=TRUE}
+parm.df <- ddply(parm.df, names(parm.df), function(xx){
+  return(as.data.frame(strategic_cue(b=xx$b, vmax=xx$vmax, kmin=xx$kmin, 
+                        a=xx$a, m=xx$m, h=xx$h, I=xx$I)))
+})
+
+parm.df$validPools_strat <- with(parm.df, checkPools(parm.df$B_strat, C=parm.df$C_strat))
+```
+
+```{r OptStratPlot}
+ggplot(subset(parm.df, validPools_opt & validPools_strat)) + 
+  geom_point(aes(y=cue_opt, x=cue_strat)) + 
+  geom_abline(slope=1, intercept=c(0), color='grey') +
+  labs(y='Optimum CUE (max B w/o compition)', x='Strategic CUE (resistant to invasion)')
+
+ggplot(subset(parm.df, validPools_til & validPools_strat)) + 
+  geom_point(aes(y=cue_til, x=cue_strat)) + 
+  geom_abline(slope=1, intercept=c(0), color='grey') +
+  labs(y='Tillman R* CUE (max B growth)', x='Strategic CUE (resistant to invasion)')
+```
+
+#Explore drivers of strategic and optimum differences
+```{r exploreDifference}
+diff.df <- subset(parm.df, validPools_opt & validPools_strat)
+
+diff.df <- melt(diff.df, measure.vars=names(parm.ls))
+
+ggplot(diff.df) + geom_violin(aes(x=as.factor(value), y=(cue_opt-cue_strat)/cue_opt)) + 
+    facet_wrap(~variable, scale='free')
+```
+
+We are particullary interested in differences in inputs
+```{r exploreInput, cache=TRUE}
+validParms <- unique(subset(parm.df, validPools_strat & validPools_opt, 
+                     select=c("b", "vmax", "kmin", "a", "h", "m")))
+I.arr <- seq(0.1, 10, by=0.3)
+Igrad <- ddply(validParms, c("b", "vmax", "kmin", "a", "h", "m"), function(xx){
+      ans1 <- ddply(data.frame(xx, I=I.arr), c('I'), function(yy){
+        yy1 <- with(data=yy, data.frame(optimum_cue(b, vmax, kmin, a, h, m, I)))
+        yy2 <- with(data=yy, data.frame(strategic_cue(b, vmax, kmin, a, h, m, I)))
+        if(nrow(yy1) == nrow(yy2)){
+          return(cbind(yy1, yy2))
+        }else
+          return(data.frame())
+      })
+      ans2 <- ddply(data.frame(xx, I=I.arr*rnorm(length(I.arr), mean=1, sd=0.05)), 
+                    c('I'), function(yy){
+        yy1 <- with(data=yy, data.frame(optimum_cue(b, vmax, kmin, a, h, m, I)))
+        yy2 <- with(data=yy, data.frame(strategic_cue(b, vmax, kmin, a, h, m, I)))
+        if(nrow(yy1) == nrow(yy2)){
+          return(cbind(yy1, yy2))
+        }else
+          return(data.frame())
+      })
+      
+      if(nrow(ans1) != nrow(ans2)){
+        #print(xx[c("b", "vmax", "kmin", "a", "h", "m"),])
+        return(NULL)
+      }
+      
+      dvar <- ans1-ans2
+      names(dvar) <- sprintf('d%s', names(dvar))
+      
+      return(cbind(ans1, dvar))
+})
+Igrad$validParam <- with(Igrad, checkPools(B=B_opt, C=C_opt)&
+                           checkPools(B=B_strat, C=C_strat))
+```
+
+```{r plotIgrad}
+plot.df <- melt(subset(Igrad, validParam), 
+                measure.vars=names(Igrad)[grepl('_(opt)|(strat)', names(Igrad))])
+temp <- as.data.frame(matrix(unlist(strsplit(as.character(plot.df$variable), '_|\\.')), ncol=2, byrow=TRUE))
+names(temp) <- c('variable', 'type')
+plot.df$variable <- NULL
+plot.df <- cbind(plot.df, temp)
+plot.df$isGrad <- grepl('d', as.character(plot.df$variable))
+
+ggplot(subset(plot.df, isGrad)) + geom_hex(aes(x=I, y=value/dI)) + 
+  facet_grid(variable~type, scales='free')
+
+ggplot(subset(plot.df, !isGrad)) + geom_hex(aes(x=I, y=value)) + 
+  facet_grid(variable~type, scales='free')
+```
+
+#Numerical validation code
+
+Let's pick some points where the gap between the Optimum CUE and Strategic CUE is small ($<20$ percent) and large ($>20$ percent).
+```{r pickNumerical}
+bigGap.df <- subset(parm.df, validPools_opt & validPools_strat & abs(cue_strat-cue_opt) > 0.2)
+smallGap.df <- subset(parm.df, validPools_opt & validPools_strat & abs(cue_strat-cue_opt) < 0.2)
+
+numParm.df <- rbind.fill(bigGap.df[sample.int(nrow(bigGap.df), size=4),],
+                         smallGap.df[sample.int(nrow(smallGap.df), size=4),])
+numParm.df$index <- 1:nrow(numParm.df)
+pander(numParm.df[,c(names(parm.ls), c('cue_opt','C_opt', 'B_opt', 'cue_strat','C_strat', 'B_strat'))])
+```
+
+##Validate optimium CUE
+
+```{r validateOpt}
+opt.validate <- ddply(numParm.df, c('index', 'C_opt', 'B_opt'), function(xx){
+  cue <- seq(0, 1, length=100)
+  ans <- steadyState(xx$b, xx$vmax, xx$kmin, xx$a, xx$h, xx$m, xx$I, cue)
+  return(data.frame(cue=cue, C=ans$C, B=ans$B))
+})
+
+plot.df <- melt(subset(opt.validate, B>0 & C>0), measure.vars=c('C', 'B'))
+ggplot(plot.df) + geom_line(aes(x=cue, y=value, group=index)) + 
+  geom_vline(data=numParm.df, aes(xintercept=cue_opt)) + 
+  facet_grid(variable~index, scales='free')
+
+```
+
+##Validate strategic CUE
+```{r validateStrat, warning=FALSE, message=FALSE, results='hide'}
+#numParm.df <- subset(parm.df, validPools_opt)
+#numParm.df$index <- 1:nrow(numParm.df)
+#numParm.df <- subset(numParm.df, index %in% sample(numParm.df$index, size=10))
+
+compitition.model <- function(t, y, parms){
+  C <- y[1]; Bn <- y[2]; Bi <- y[3]
+
+  ans <- with(parms,
+              c(dC = I - m*C - C*(vn*Bn/(kn+Bn) + vi*Bi/(ki+Bi)),
+                   dBn = cuen*vn*Bn*C/(kn+Bn) - hn*Bn,
+                   dBi = cuei*vi*Bi*C/(ki+Bi) - hi*Bi)
+       )
+  return(list(ans))
+}
+
+runInvasions <- ddply(numParm.df, c('index'), function(xx){
+  
+  parm <- as.list(xx[, c('b', 'vmax', 'kmin', 'a', 'm', 'I')])
+  
+  parm$hn <- xx$h
+  parm$hi <- xx$h
+  
+  cueCombo <- expand.grid(cuen=seq(1, 100, length=50)/100,
+                          rel_cuei=rnorm(10, sd=0.1))
+  cueCombo$cuei <- cueCombo$cuen+rnorm(nrow(cueCombo), sd=0.1)
+  cueCombo <- cueCombo[cueCombo$cuei > 0,]
+  
+  cueCombo$vn <- with(parm, cue_v_tradeoff(b=b, vmax=vmax, cueCombo$cuen))
+  cueCombo$kn <- with(parm, v_k_tradeoff(kmin=kmin, a=a, v=cueCombo$vn))
+  
+  cueCombo$vi <- with(parm, cue_v_tradeoff(b=b, vmax=vmax, cueCombo$cuei))
+  cueCombo$ki <- with(parm, v_k_tradeoff(kmin=kmin, a=a, v=cueCombo$vi))
+  
+  invade.df <- ddply(cueCombo, c('cuen', 'cuei'), function(cuePairs){
+    comboParm <- c(parm, cuePairs)
+    preInvade <- with(comboParm, steadyState(b, vmax, kmin, a, h=hn, m, I, cue=cuen))
+    if(all(preInvade > 0)){
+      y0 <- list(C=preInvade$C, Bn=preInvade$B, Bi=preInvade$B*0.1)
+      invasion <- tryCatch({lsoda(y=unlist(y0), times=c(1, 7, 30, 365, 365*10),
+                                  func=compitition.model, parms=comboParm)},
+                        warning = function(w){return(data.frame())},
+                        error = function(e){return(data.frame())}
+      )
+      names(y0) <- paste(names(y0), '0', sep='')
+      if(nrow(invasion) == 5){
+        finalPools <- as.data.frame(c(comboParm, y0, as.list(invasion[nrow(invasion),])))
+      }else{
+        finalPools <- as.data.frame(comboParm)
+      }
+    }else{
+      finalPools <- as.data.frame(comboParm)
+    }
+  })
+  
+  return(invade.df)
+})
+
+runInvasions <- ddply(runInvasions, c('index'), function(xx){
+  ans <- steadyState_compete(b=xx$b, vmax=xx$vmax, kmin=xx$kmin, a=xx$a, m=xx$m, I=xx$I,
+                             h=xx$hn, cue_i=xx$cuei, cue_n=xx$cuen)
+  names(ans) <- c('C_ss', 'B_i_ss', 'B_n_ss')
+  return(data.frame(xx, as.data.frame(ans)))
+})
+```
+```{r plotValid}
+temp <- merge(runInvasions, numParm.df, by='index')
+ggplot(subset(temp, Bn > 0 & Bi > 0)) +
+  geom_point(aes(x=cuen, y=cuei, color=Bn > Bi)) + 
+  geom_vline(data=numParm.df, aes(xintercept=cue_strat), color='blue') +
+  geom_vline(data=numParm.df, aes(xintercept=cue_opt), color='red') +
+  labs(x='Native CUE', y='Invader CUE', title='Winner of 10 year invasion') +
+  facet_wrap(~h+index)
+```
+
+#Numerical sketch book below
+
+At steady state:
+$C=\frac{I+\sum_i \frac{k_i h }{\epsilon_i}}{m+\sum_i v_i}$
+If there are n identically parameterized pools then:
+$C_n=\frac{I+n\frac{k h }{\epsilon}}{m+nv}$
+Which is not the same as a single biomass pool
+$C_1=\frac{I+\frac{k h }{\epsilon}}{m+v}$.
+
+See below for a numerical example.
+```{r}
+
+runInvasions_ss <- ddply(numParm.df, c('index'), function(xx){
+  
+  parm <- as.list(xx[, c('b', 'vmax', 'kmin', 'a', 'm', 'I')])
+
+  ans <- ddply(data.frame(cue=seq(0.1, 0.9, length=200)), c('cue'), function(yy){
+    ans <- data.frame(cue_n=yy$cue, cue_i=yy$cue*rnorm(1, mean=1, sd=0.1))
+    return(data.frame(ans,
+                        as.data.frame(steadyState_compete(b=xx$b, 
+                                                          vmax=xx$vmax, kmin=xx$kmin, 
+                            a=xx$a, m=xx$m, h=xx$h, I=xx$I, 
+                            cue_n=ans$cue_n, cue_i=ans$cue_i)
+                        )))
+  })
+})
+
+#merge(runInvasions_ss, numParm.df)
+ggplot(subset(merge(runInvasions_ss, numParm.df), B_n > 0 & B_i > 0 & C > 0)) +
+  geom_point(aes(x=cue_n, y=cue_i, color=B_n > B_i)) + 
+  geom_vline(data=numParm.df, aes(xintercept=cue_strat)) + 
+  labs(x='Native CUE', y='Invader CUE', title='Winner of 10 year invasion') +
+  facet_wrap(~index+h)
+
+
+test <- subset(numParm.df, index==2)
+tradeoffs.df <- data.frame(cue=seq(0, 1, length=100),
+                   v=cue_v_tradeoff(b=test$b, vmax=test$vmax, cue=seq(0, 1, length=100)),
+                   k=v_k_tradeoff(kmin=test$kmin, a=test$a, 
+                                  v=cue_v_tradeoff(b=test$b, vmax=test$vmax, 
+                                                   cue=seq(0, 1, length=100))))
+
+tradeoffs.df <- ddply(tradeoffs.df, c('cue', 'v', 'k'), function(xx){
+  ans1 <- as.data.frame(steadyState(test$b, test$vmax, test$kmin, test$a, test$h, test$m, test$I, xx$cue))
+  ans2 <- as.data.frame(steadyState_compete(test$b, test$vmax, test$kmin, test$a, test$h, test$m, test$I, xx$cue, xx$cue))
+  names(ans2) <- sprintf('%s_compete', names(ans2))
+  return(cbind(ans1, ans2))
+})
+ggplot(tradeoffs.df) + geom_point(aes(x=cue,y=cue*v/(B+k))) +
+ geom_point(aes(x=cue,y=cue*v/(B_n_compete+k)), color='blue') +
+  geom_vline(xintercept=test$cue_strat, color='red')
+
+steadyState_compete(b=test$b, vmax=test$vmax, kmin=test$kmin, a=test$a, h=test$h, m=test$m,
+                    I=test$I, cue_n=test$cue_strat, cue_i=test$cue_strat+0.02)
+```
+
+```{r timeEvol}
+test <- subset(numParm.df, index ==2)
+y0 <- list(C=test$C_opt, Bn=test$B_opt, Bi=test$B_opt*0.1)
+comboParm <- c(test[1, c('b', 'vmax', 'kmin', 'a', 'm', 'I')],
+               cuen=test$cue_opt,
+               cuei=test$cue_opt,
+               hn=test$h,
+               hi=test$h)
+comboParm <- c(comboParm,
+               vn=cue_v_tradeoff(test$b, test$vmax, cue=comboParm$cuen),
+               vi=cue_v_tradeoff(test$b, test$vmax, cue=comboParm$cuei))
+comboParm <- c(comboParm,
+               kn=v_k_tradeoff(test$kmin, test$a, v=comboParm$vn),
+               ki=v_k_tradeoff(test$kmin, test$a, v=comboParm$vi))
+carbonPools <- lsoda(y=unlist(y0), times=c(1:9, (1:9)*10, (1:9)*100, (1:9)*1e4),
+                                  func=compitition.model, parms=comboParm)
+
+ggplot(as.data.frame(carbonPools)) + 
+  geom_line(aes(x=time, y=Bi), color='red') + 
+  geom_line(aes(x=time, y=Bn), color='blue') + 
+  geom_vline(xintercept=10*365) + geom_hline(yintercept=test$B_strat) + geom_hline(yintercept=test$B_opt, color='green') + 
+  scale_x_log10()
+```
+
+```{r}
+temp <- with(test, {
+  cue <- seq(0, 1, length=100)
+  v <- cue_v_tradeoff(b=b, vmax=vmax, cue)
+  k <- v_k_tradeoff(kmin=kmin, a=a, v=v)
+  
+  ans <- steadyState_compete(b, vmax, kmin, a, h, m, I, cue_i=cue-0.005, cue_n=cue)
+  
+  measure <- cue*v/(k+ans$B_n)
+  ans <- data.frame(cue, v, k, ans, measure)
+  return(ans)
+})
+
+ggplot(temp) + geom_point(aes(x=cue, y=measure)) +  
+  geom_vline(xintercept=test$cue_strat) + 
+  geom_vline(xintercept=test$cue_opt, color='green') +
+  geom_vline(aes(xintercept=cue[which.max(B_n)]), color='blue')
+
+ggplot(temp) + geom_point(aes(x=cue, y=B_i)) + 
+  geom_point(aes(x=cue, y=C), color='blue') + 
+  geom_vline(xintercept=test$cue_strat) + 
+  geom_vline(xintercept=test$cue_opt, color='green')
+
+ggplot(subset(temp, B_n > 0 & B_i > 0)) + geom_point(aes(x=cue, y=B_n-B_i)) +
+  geom_hline(yintercept=0) + geom_vline(aes(xintercept=cue[which.min(abs(B_n-B_i))])) +
+  geom_vline(xintercept=test$cue_strat, color='red') + 
+  geom_vline(xintercept=test$cue_opt, color='green')
+
+ggplot(subset(merge(runInvasions_ss, numParm.df),
+              index==test$index & B_n > 0 & B_i > 0 & C > 0)) +
+  geom_point(aes(x=cue_n, y=cue_i, color=B_n > B_i)) + 
+  geom_vline(data=subset(temp, B_n > 0 & B_i > 0), 
+             aes(xintercept=cue[which.min(abs(B_n-B_i))])) + 
+  labs(x='Native CUE', y='Invader CUE', title='Winner of 10 year invasion')
+```

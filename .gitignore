@@ -6,3 +6,4 @@
 *_files
 temp/*
 *.RData
+scratch/*
